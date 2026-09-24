@@ -1,297 +1,309 @@
-# Idea — Modular Company Task System, Operable by AI Agents
+# Ý tưởng — Hệ thống Tác vụ Modular cho Công ty, Vận hành bởi AI Agents
 
-**Created Date:** 2026-09-23
-**Last Updated:** 2026-09-23
+**Ngày tạo:** 2026-09-23
+**Cập nhật lần cuối:** 2026-09-23
 **Tags:** `#ProjectIdea`, `#SystemArchitecture`, `#Modularity`, `#AIAgents`, `#CLIFirst`, `#EventDriven`, `#DomainSpecific`
-**Status:** Draft — under evaluation
-**Type:** Idea capture + critical evaluation (structure & reasoning quality)
-**Project:** Modular Bank Operations System — anchor domain: **banking operations** (Clarification Gap #1 resolved: the "company with specific expertise" is a bank)
+**Trạng thái:** Bản nháp — đang đánh giá
+**Loại:** Ghi nhận ý tưởng + đánh giá phản biện (cấu trúc & chất lượng lập luận)
+**Dự án:** Hệ thống Tài chính Tiêu dùng Modular — lĩnh vực neo đậu: **vận hành tài chính tiêu dùng**, lấy chuẩn **Home Credit Việt Nam** (một công ty tài chính được cấp phép, chịu giám sát của NHNN). Clarification Gap #1 đã làm rõ: "công ty có chuyên môn cụ thể" là một *bên cho vay*, không phải ngân hàng nhận tiền gửi.
 
 ---
 
-## 💡 Original Idea (Verbatim)
+## 📌 Nhật ký Quyết định (cập nhật 2026-09-24)
+
+Các quyết định định hình kiến trúc về sau — ghi lại ở đây để các chỉnh sửa tương lai luôn nhất quán:
+
+1. **Lĩnh vực neo đậu = cho vay tiêu dùng (chuẩn HomeCredit).** Không phải payment processor, không phải ngân hàng bán lẻ. Luồng chịu lực là **vòng đời khoản vay** (`origination → underwriting → hợp đồng → giải ngân → trả nợ/servicing → sổ sách`), không phải "thanh toán làm trung tâm".
+2. **Lát cắt v0 = vay tiền mặt online, end-to-end**, mô phỏng kênh số hoá nhất của Home Credit (KYC/CCCD → auto-duyệt ~3 phút → hợp đồng → giải ngân ~10 phút → trả nợ đầu → hạch toán). Lý do: saga sạch nhất, kiểm chứng yêu cầu exactly-once của luồng tiền di chuyển, chưa cần context merchant/POS.
+3. **Bản đồ bounded context đã sửa (thay thế bản đồ cũ theo hướng `payments`-centric hoặc `approval/AML`-centric):** `onboarding/kyc`, `application`, `credit_decisioning`, `contracting`, `disbursement`, `loan_servicing`, `ledger`, `reporting` (+ `collections`, `merchant` trong v1). `Approval/AML` được tách thành `onboarding/kyc` (định danh) và `credit_decisioning` (rủi ro) — chúng là các mô hình, dữ liệu và độ trễ khác nhau.
+4. **Ranh giới benchmarking:** hồ sơ HomeCredit chỉ được dùng làm tham chiếu *nghiệp vụ* dựa trên thông tin công khai (khung sản phẩm/SLA, bề mặt tuân thủ NHNN/CIC/Nghị định 13/2023). Không tham chiếu bất kỳ tài liệu quy trình nội bộ độc quyền nào.
+
+---
+
+## 💡 Ý tưởng Gốc (Nguyên văn)
 
 > *"Tôi muốn làm 1 hệ thống lớn chuyên biệt cho các tác vụ của 1 công ty có chuyên môn cụ thể, các tác vụ ấy có khả năng liên kết với nhau thông qua hệ thống back-end vững chắc, tuy nhiên các thành phần, nhân tố trong đó phải có khả năng độc lập cao, có khả năng thích ứng với thời cuộc, dễ dàng sửa đổi và phát triển dài lâu. Đồng thời có khả năng tích hợp AI và có hệ thống CLI để thao tác tự do bằng AI Agent."*
 
-*(Original Vietnamese wording kept as a marked quote, per Language Policy A6.)*
+*(Nguyên văn tiếng Việt được giữ nguyên như một trích dẫn được đánh dấu, theo Language Policy A6.)*
 
-**English rendering:** A large system specialized for the tasks of a company with specific domain expertise; those tasks can interlink through a solid back-end system; however, every component inside must have high independence, adapt to changing times, be easy to modify, and support long-term development. At the same time, it must be able to integrate AI, and it must have a CLI system through which AI Agents can operate freely.
-
----
-
-## 📌 Key Takeaways (TL;DR)
-
-- The idea describes a **domain-specific, agent-operable business platform**: vertical (specialized), modular (independent components), evolvable (long-term), and AI-native (CLI + agents).
-- The three strongest instincts here are: **(1) domain specialization as the moat**, **(2) component independence as a design goal**, **(3) agents as first-class system operators** — these are exactly the three differentiators of modern platforms.
-- The core tension to resolve is **independence vs. integration**: components that must stay independent *and* link together need an explicit contract layer (events/APIs/schemas). This back-end "linking" decision is where the design will live or die.
-- Biggest gaps: no concrete first domain identified; "agents operate freely" has no governance story; **CLI alone is not an agent interface** (agents also need structured protocols like JSON schemas / MCP / OpenAPI).
-- Verdict: a **well-directioned, strategically sound idea** with a clear-thinking architecture instinct, weakened only by abstraction (no anchor domain yet) and one unsafe assumption (ungoverned agent freedom).
-- **Follow-up evaluation added (2026-09-23):** +5 insights (Conway's Law, data evolution, per-operation AI economics, data flywheel polarity, option-buying), a 12-point list of **clarification gaps** the idea must resolve, and **8 risks to acknowledge** before committing — see the expanded sections below.
+**Diễn giải tiếng Anh:** Một hệ thống lớn chuyên biệt cho các tác vụ của một công ty có chuyên môn lĩnh vực cụ thể; các tác vụ đó có thể liên kết với nhau thông qua một hệ thống back-end vững chắc; tuy nhiên mọi thành phần bên trong phải có độ độc lập cao, thích ứng với thời cuộc, dễ sửa đổi và hỗ trợ phát triển lâu dài. Đồng thời, hệ thống phải tích hợp được AI và phải có hệ thống CLI để AI Agents có thể vận hành tự do.
 
 ---
 
-## 🧠 Idea Deconstruction (6 Atomic Requirements)
+## 📌 Tóm tắt Chính (TL;DR)
 
-| # | Requirement (user's words) | Engineering Interpretation | Architectural Axis |
-|---|----------------------------|----------------------------|--------------------|
-| 1 | "Large system specialized for a company with specific expertise" | A **vertical domain platform** built around one profession's workflows (not a generic tool) | Scope & domain |
-| 2 | "Tasks interlink through a solid back-end" | An **integration backbone**: reliable messaging, data contracts, workflow choreography/orchestration | Integration |
-| 3 | "Components have high independence" | **Modularity / loose coupling**: independent deployability, bounded contexts, failure isolation | Coupling |
-| 4 | "Adaptable to the times, easy to modify, long-term" | **Evolutionary architecture**: refactoring discipline, versioning, backward compatibility, ADRs | Evolvability |
-| 5 | "AI integration capability" | **AI as an embedded capability** inside tasks (models, agents, copilots) | Intelligence |
-| 6 | "CLI so AI Agents can operate freely" | **Agent-native interface**: every capability exposed as a callable tool with structured I/O | Interface |
-
-The idea is unusually *complete* for a first draft — it covers **scope, integration, coupling, evolvability, intelligence, and interface**, which is essentially six of the classic architecture driver categories. That is a sign of systems thinking.
+- Ý tưởng mô tả một **nền tảng nghiệp vụ theo lĩnh vực, có agent vận hành**: dọc (chuyên biệt), modular (các thành phần độc lập), tiến hoá được (dài hạn) và AI-native (CLI + agents).
+- Ba bản năng mạnh nhất ở đây là: **(1) chuyên biệt lĩnh vực là hào cạnh tranh**, **(2) độc lập thành phần là mục tiêu thiết kế**, **(3) agent là tác nhân vận hành hạng nhất** — đây chính là ba điểm khác biệt của các nền tảng hiện đại.
+- Căng thẳng cốt lõi cần giải quyết là **độc lập vs. tích hợp**: các thành phần phải vừa độc lập *vừa* liên kết với nhau cần một lớp hợp đồng tường minh (events/APIs/schemas). Quyết định "liên kết" này ở back-end chính là nơi thiết kế sẽ sống hay chết.
+- Khoảng trống lớn nhất: chưa có lĩnh vực cụ thể đầu tiên; "agents vận hành tự do" chưa có câu chuyện quản trị; **riêng CLI không phải là giao diện agent** (agent còn cần các giao thức có cấu trúc như JSON schema / MCP / OpenAPI).
+- Nhận định: một ý tưởng **định hướng tốt, đúng chiến lược**, với bản năng kiến trúc rõ ràng, chỉ bị suy yếu bởi tính trừu tượng (chưa có lĩnh vực neo đậu) và một giả định không an toàn (agent tự do chưa được quản trị).
+- **Đánh giá bổ sung (2026-09-23):** +5 insight (Định luật Conway, tiến hoá dữ liệu, kinh tế AI theo thao tác, cực tính bánh đà dữ liệu, mua quyền chọn), danh sách 12 **khoảng trống cần làm rõ** ý tưởng phải giải quyết, và **8 rủi ro phải nhận biết** trước khi cam kết — xem các phần mở rộng bên dưới.
 
 ---
 
-## 💡 Insights & Clarifications (Making the Idea Sharper)
+## 🧠 Giải cấu trúc Ý tưởng (6 Yêu cầu Nguyên tử)
 
-### Insight 1 — Decide: is this a *product* or an *internal platform*?
-"One company with specific expertise" is ambiguous: is it **one specific company** (internal tooling) or **companies of one profession** (vertical SaaS product)?
-- **Internal platform:** deep integration with existing processes, no multi-tenancy, deployment = their infra.
-- **Vertical product:** needs multi-tenancy, configurable workflow engine, onboarding, billing, support — a fundamentally larger system.
-*Why it matters:* this single decision changes the architecture (single-tenant vs multi-tenant), the roadmap, and the business model. Resolve it first.
+| # | Yêu cầu (lời người dùng) | Diễn giải Kỹ thuật | Trục Kiến trúc |
+|---|--------------------------|--------------------|----------------|
+| 1 | "Hệ thống lớn chuyên biệt cho một công ty có chuyên môn cụ thể" | Một **nền tảng lĩnh vực dọc** xây quanh quy trình của một nghề (không phải công cụ tổng quát) | Phạm vi & lĩnh vực |
+| 2 | "Các tác vụ liên kết thông qua back-end vững chắc" | Một **backbone tích hợp**: messaging đáng tin cậy, hợp đồng dữ liệu, choreography/orchestration quy trình | Tích hợp |
+| 3 | "Các thành phần có độ độc lập cao" | **Modularity / khớp nối lỏng**: khả năng triển khai độc lập, bounded contexts, cô lập lỗi | Coupling |
+| 4 | "Thích ứng với thời cuộc, dễ sửa đổi, lâu dài" | **Kiến trúc tiến hoá**: kỷ luật refactoring, versioning, tương thích ngược, ADRs | Khả năng tiến hoá |
+| 5 | "Khả năng tích hợp AI" | **AI như một khả năng nhúng** bên trong tác vụ (models, agents, copilots) | Trí tuệ |
+| 6 | "CLI để AI Agents thao tác tự do" | **Giao diện agent-native**: mọi khả năng được phơi bày như một tool gọi được với I/O có cấu trúc | Giao diện |
 
-### Insight 2 — The "solid back-end" *is* the idea
-Requirement #2 is the load-bearing wall. "Tasks interlink" implies an **event-driven backbone** (e.g., a durable message bus + saga/choreography), not just a pile of REST calls:
-- Task A finishes → emits event → Task B triggers, with retries, idempotency keys, dead-letter queues, and an audit trail.
-- "Solid" should be defined as measurable properties: **durability, ordering guarantees, at-least-once/at-most-once delivery, observability**.
-*Why it matters:* if this layer is hand-waved, "independent components" silently become a distributed ball of mud.
-
-### Insight 3 — Independence ≠ isolation; independence needs *contracts*
-High independence only survives if governed by **stable interfaces, volatile internals**:
-- Each component owns its data (database-per-context), communicates only through versioned APIs/events (schema registry, contract tests).
-- Classic trade-off: **modular monolith vs microservices**. Start modular monolith (one deployable, hard module boundaries enforced by lint rules/archunit), split only when a fitness function proves a need. This matches the evolutionary-architecture thinking already in the diary (HAL, refactoring, scaling — see Related Topics).
-*Why it matters:* without contract discipline, "independence" degenerates into "each team invents its own protocol" → integration chaos.
-
-### Insight 4 — "Adaptable / easy to modify / long-term" is a *discipline*, not a feature
-You cannot design adaptability in once; you **earn** it continuously:
-- CI/CD with fast test suites, ADRs (Architecture Decision Records) so the *why* survives staff turnover, semantic versioning + deprecation windows, feature flags for safe rollout, strangler pattern for replacing legacy parts.
-- Fitness functions: automated checks (dependency rules, latency budgets, security scans) that *guard* the architecture as it evolves.
-*Why it matters:* this requirement is the one most ideas forget, and it's the one that decides whether the system still exists in 5 years.
-
-### Insight 5 — "AI integration" actually means *three* different things
-Disambiguate before building:
-1. **AI inside tasks** — models embedded in a workflow (e.g., document extraction in an approval step).
-2. **AI as orchestrator** — an agent plans/executes multi-step tasks (agent = the workflow engine's client).
-3. **AI as operator via CLI** — agents drive the system like a power user (the stated requirement).
-Each has different reliability needs. Note that AI is **non-deterministic** — business systems need guardrails: human-in-the-loop approval, audit logs, deterministic fallbacks, and permission scoping.
-
-### Insight 6 — "CLI for free agent operation" is 50% right — the missing half is the *protocol*
-A CLI is an excellent agent interface (text in/out, composable, scriptable, JSON flags), but modern agent operation needs more:
-- **Structured output:** every command supports `--json` so agents parse results, not prose.
-- **Self-describing commands:** `help --json` / machine-readable schemas (think Cobra/Click/Typer + JSON schema) — agents discover capabilities at runtime.
-- **A protocol layer:** MCP (Model Context Protocol) or OpenAPI tool schemas let agents call capabilities *programmatically*, without shell round-trips. The CLI is the human/agent shell; the protocol is the contract.
-- **Governance:** "tự do" (free) must be bounded — least-privilege tokens, sandboxing, approval flows for destructive ops, full audit trail. An ungoverned agent with a company-system CLI is a liability, not a feature.
-*Bonus insight:* **headless core + many thin clients** — one engine, exposed via CLI (agents/scripts), Web UI (business users), API (integrations). CLI-only UX would restrict adoption to technical users.
-
-### Insight 7 — Conway's Law is your co-designer (structure mirrors the team)
-The system's component boundaries will mirror the structure of whoever builds it. Built solo (or by one small team), "independent components" have **no external consumer pressure** to stay decoupled — they quietly degrade into folders with casual imports. Independence is only *real* when there are genuinely independent teams or release trains (three modules that can deploy and evolve on their own). If you build alone, be honest about your realistic independence unit: **module boundary + enforced rules** (import-linting, contract tests) — not physical services. And use this consciously: introduce real independence gradually as actual consumers appear (strangler pattern), instead of pre-building autonomy nobody needs yet.
-
-### Insight 8 — "Solid back-end" is mostly a *data evolution* problem
-Linking tasks means data/events cross component boundaries — so **every schema change is a potential breaking change** for downstream consumers. A long-lived linked system therefore needs, from day one: a schema registry, semantic versioning of contracts, and a deprecation policy ("old version supported for N months"). "Solid" is not a property you install; it is a *versioning discipline* you apply for years. Miss this, and the back-end freezes — nobody dares touch schemas, and the "adaptive, easy-to-modify" requirement (4) quietly dies.
-
-### Insight 9 — AI integration turns one-time costs into *per-operation* costs
-An agent-operated business system pays a **variable cost per action** (tokens, model calls, latency). Business systems run high volumes. You must model **unit economics per task**: cost/task, latency budget, error-rate budget, fallback cost. A beautifully modular, agent-operable system that costs $0.50/task on a $0.05-margin operation is economically dead. Also, model providers change pricing/models/availability unpredictably — abstract the AI layer at the *interface* (provider-neutral tool schemas + thin adapters), not by wrapping every obscure feature.
-
-### Insight 10 — The AI-vs-expert flywheel can run in reverse
-The edge of this idea = domain knowledge + AI. But if AI gradually replaces the experts' *doing*, the stream of new real-world/vetted data dries up, and the AI drifts from reality (concept drift). The workflow must keep domain experts as **validators** (human-in-the-loop) — because that validation signal *is* tomorrow's training/eval data. Design the human check into the workflow, not as an afterthought. Remember also: the domain knowledge lives in experts' heads; the system is hostage to whoever codified it first — plan continuous domain discovery (interviews, shadowing, log mining → new task designs).
-
-### Insight 11 — "Adapting to the times" is option-buying, not forecasting
-You cannot predict the future; the architecture should buy **options (reversibility)** instead: feature flags, strangler patterns, ADRs, and a deliberately thin core contract. Every irreversible commitment (schema, topology, tech stack) is a bet — count your bets and limit them. This is exactly the "evolutionary architecture + fitness functions" thinking already in the diary's agile/architecture notes.
+Ý tưởng này *hoàn chỉnh* một cách bất thường cho một bản nháp đầu tiên — nó bao phủ **phạm vi, tích hợp, coupling, khả năng tiến hoá, trí tuệ và giao diện**, về cơ bản là sáu trong số các hạng mục trình điều khiển kiến trúc kinh điển. Đó là dấu hiệu của tư duy hệ thống.
 
 ---
 
-## ❓ Clarification Gaps — Points Still Unclear (Điểm chưa được làm rõ)
+## 💡 Insight & Làm Rõ (Làm Sắc bén Ý tưởng)
 
-The idea statement leaves these unresolved. They are *design blockers*, not style questions — each one changes the architecture:
+### Insight 1 — Quyết định: đây là *product* hay *nền tảng nội bộ*?
+"Một công ty có chuyên môn cụ thể" là mập mờ: là **một công ty cụ thể** (công cụ nội bộ) hay **các công ty cùng một nghề** (vertical SaaS product)?
+- **Nền tảng nội bộ:** tích hợp sâu với quy trình hiện có, không multi-tenancy, triển khai = hạ tầng của họ.
+- **Sản phẩm dọc:** cần multi-tenancy, workflow engine cấu hình được, onboarding, billing, hỗ trợ — một hệ thống lớn hơn về bản chất.
+*Vì sao quan trọng:* quyết định này đơn lẻ đổi kiến trúc (single-tenant vs multi-tenant), lộ trình và mô hình kinh doanh. Giải quyết nó trước.
 
-1. **Anchoring identity:** ONE specific company vs an entire profession? (Determines multi-tenancy, per-client customization, licensing, effort.)
-2. **Task granularity:** Atomic action (single command) vs long-running process (a case spanning days)? Orchestration differs hugely (simple calls vs sagas with compensation).
-3. **"Liên kết" semantics:** Data flow (output of A feeds B), control flow (A triggers B), or both? And *what happens when B fails after A already committed*? (compensation/rollback behavior)
-4. **AI scope:** Generative only, or also classical ML (routing, forecasting, classification)? Which tasks tolerate AI error (recommendations) vs which do not (financial posting, legal output)?
-5. **CLI operator model:** Humans only, agents only, or both with different permissions? Is there a read-only agent role vs an execute role? Are all agent actions logged and approvable?
-6. **Deployment & data residence:** Cloud / on-prem / hybrid? Public cloud may be off-limits for some company data (finance, healthcare, confidential business data; Vietnamese Decree 13/2023 on personal data protection).
-7. **Data sensitivity class:** PII, financial, health, trade secrets? → determines compliance scope (data protection rules, sector regulations, possibly the EU AI Act if ever exposed to EU users).
-8. **Existing tooling:** What do target users run today (Excel, ERP, CRM, email)? Does the system replace, complement, or import/export from them? — Integration adapters are usually the hidden 50–80% of project time.
-9. **v1 success metric:** What measurable outcome proves the idea? (e.g., task time −60%, error rate −40%, cost/task below X) Without a number, "large system" stays unverifiable.
-10. **Ownership of "specialization":** Is the domain expertise yours, a partner's, or to be learned? The moat is ~90% domain understanding, ~10% code.
-11. **Business model (if product):** per-seat, per-task, license, outcome-based?
-12. **Human role after automation:** Which steps *must* stay human, and how is that enforced? (liability, trust, regulation)
+### Insight 2 — "Back-end vững chắc" *chính là* ý tưởng
+Yêu cầu #2 là bức tường chịu lực. "Các tác vụ liên kết" hàm ý một **backbone hướng sự kiện** (ví dụ: message bus bền vững + saga/choreography), không chỉ là một chồng lời gọi REST:
+- Task A hoàn tất → phát event → Task B kích hoạt, kèm retries, idempotency keys, dead-letter queues và nhật ký kiểm toán.
+- "Vững chắc" nên được định nghĩa bằng các thuộc tính đo được: **độ bền, đảm bảo thứ tự, phân phối at-least-once/at-most-once, observability**.
+*Vì sao quan trọng:* nếu lớp này bị làm lơ, "các thành phần độc lập" âm thầm trở thành một cục bùn phân tán.
 
----
+### Insight 3 — Độc lập ≠ cô lập; độc lập cần *hợp đồng*
+Độ độc lập cao chỉ sống sót nếu được quản trị bởi **giao diện ổn định, phần bên trong linh hoạt**:
+- Mỗi thành phần sở hữu dữ liệu của nó (database-per-context), chỉ giao tiếp qua API/event có version (schema registry, contract tests).
+- Trade-off kinh điển: **modular monolith vs microservices**. Bắt đầu với modular monolith (một deployable, ranh giới module cứng rắn nhờ lint rules/archunit), chỉ tách khi một fitness function chứng minh nhu cầu. Điều này khớp với tư duy kiến trúc tiến hoá đã có trong nhật ký (HAL, refactoring, scaling — xem Related Topics).
+*Vì sao quan trọng:* thiếu kỷ luật hợp đồng, "độc lập" thoái hoá thành "mỗi đội tự phát minh giao thức riêng" → hỗn loạn tích hợp.
 
-## ✅ Strengths (Điểm tốt)
+### Insight 4 — "Thích ứng / dễ sửa / lâu dài" là *kỷ luật*, không phải tính năng
+Bạn không thể thiết kế khả năng thích ứng một lần; bạn **kiếm được** nó liên tục:
+- CI/CD với bộ test nhanh, ADR (Architecture Decision Records) để *cái-tại-sao* sống sót qua các lần đổi người, semantic versioning + cửa sổ deprecation, feature flags để triển khai an toàn, strangler pattern để thay thế phần cũ.
+- Fitness functions: các kiểm tra tự động (dependency rules, ngân sách độ trễ, quét bảo mật) *bảo vệ* kiến trúc khi nó tiến hoá.
+*Vì sao quan trọng:* đây là yêu cầu mà hầu hết ý tưởng quên, và nó là thứ quyết định hệ thống có còn tồn tại sau 5 năm hay không.
 
-1. **Domain specialization is a real moat.** Generic horizontal platforms are crowded and commoditized; a system tuned to one profession's workflows has deep switching costs, obvious ROI, and is hard to displace. Vertical beats horizontal for a small builder.
-2. **Component independence is the right default.** It buys failure isolation, independent deployability, parallel team work, and technology freedom per component — directly countering the "big ball of mud" that kills long-lived internal systems.
-3. **Integration-first ("solid back-end") is mature instinct.** Many solo ideas jump to UI first; this one correctly puts the connective tissue (data flow, task linkage) at the center — the part that determines whether the system scales beyond a demo.
-4. **Agent-native CLI is ahead of the curve.** Designing every capability to be machine-operable (structured I/O, tool schemas) aligns with the 2025–2026 agentic-workflow shift (MCP, function calling). Systems designed *for agents* will be strictly more automatable than those retrofitted.
-5. **Long-term evolvability is prioritized.** Explicitly valuing "adapt to the times, easy to modify, long-term" means the design starts from maintainability rather than treating it as an afterthought — the difference between a 5-year asset and a 6-month rewrite.
-6. **Highly buildable with your current skill set.** Backend + AI/ML + CLI/TUI experience (see the Custom Multi-TUI project) + DevOps notes (IaC, MLOps) cover essentially every layer this idea needs. It is an ambitious but *reachable* project, not vaporware.
+### Insight 5 — "Tích hợp AI" thực ra có nghĩa *ba* thứ khác nhau
+Phân định trước khi xây:
+1. **AI bên trong tác vụ** — mô hình nhúng trong workflow (ví dụ: trích xuất tài liệu trong một bước phê duyệt).
+2. **AI như orchestrator** — một agent lập kế hoạch/thực thi tác vụ đa bước (agent = client của workflow engine).
+3. **AI như operator qua CLI** — agent điều khiển hệ thống như một người dùng quyền lực (yêu cầu đã nêu).
+Mỗi loại có nhu cầu độ tin cậy khác nhau. Lưu ý AI là **phi tất định** — hệ thống nghiệp vụ cần guardrails: phê duyệt human-in-the-loop, log kiểm toán, fallback tất định, và phạm vi phân quyền.
 
----
+### Insight 6 — "CLI để agent vận hành tự do" đúng 50% — nửa còn thiếu là *giao thức*
+CLI là một giao diện agent tuyệt vời (văn bản vào/ra, tổ hợp được, script được, cờ JSON), nhưng vận hành agent hiện đại cần nhiều hơn:
+- **Đầu ra có cấu trúc:** mọi lệnh hỗ trợ `--json` để agent phân tích kết quả chứ không phải văn xuôi.
+- **Lệnh tự mô tả:** `help --json` / schema đọc máy được (nghĩ Cobra/Click/Typer + JSON schema) — agent khám phá khả năng lúc runtime.
+- **Một lớp giao thức:** MCP (Model Context Protocol) hoặc tool schema OpenAPI cho phép agent gọi khả năng *theo lập trình*, không cần vòng lặp shell. CLI là vỏ cho người/agent; giao thức là hợp đồng.
+- **Quản trị:** "tự do" phải bị giới hạn — token quyền-tối-thiểu, sandboxing, luồng phê duyệt cho thao tác phá hoại, nhật ký kiểm toán đầy đủ. Một agent không được quản trị với CLI của hệ thống công ty là gánh nặng, không phải tính năng.
+*Insight bổ sung:* **core không đầu + nhiều client mỏng** — một engine, phơi bày qua CLI (agent/scripts), Web UI (người dùng nghiệp vụ), API (tích hợp). UX chỉ có CLI sẽ giới hạn sự chấp nhận ở người dùng kỹ thuật.
 
-## ⚠️ Weaknesses & Risks (Điểm xấu)
+### Insight 7 — Định luật Conway là người thiết kế ĐỒNG HÀNH (cấu trúc phản chiếu đội ngũ)
+Ranh giới thành phần của hệ thống sẽ phản chiếu cấu trúc của người xây nó. Xây solo (hoặc một đội nhỏ), "các thành phần độc lập" **không có áp lực người tiêu dùng bên ngoài** để giữ tách rời — chúng âm thầm thoái hoá thành các thư mục với import tuỳ tiện. Độc lập chỉ *thật sự* khi có các đội hoặc release train thực sự độc lập (ba module tự triển khai và tiến hoá). Nếu xây một mình, hãy trung thực về đơn vị độc lập thực tế của bạn: **ranh giới module + luật được ràng buộc** (import-linting, contract tests) — không phải service vật lý. Và dùng điều này một cách có chủ đích: đưa sự độc lập thực sự dần dần khi người tiêu dùng thực sự xuất hiện (strangler pattern), thay vì đóng gói sẵn sự tự trị chưa ai cần.
 
-1. **Scope explosion / the "large system" trap.** "Large + specialized + AI + CLI + long-term" with no concrete first domain is the classic v1 trap: everything is possible, nothing ships. Without a bounded starting slice, the project balloons or stalls.
-   *Mitigation:* pick ONE real company domain + 3 concrete tasks for v0; grow via strangler pattern.
-2. **The independence-vs-integration contradiction is unresolved.** Components that are "highly independent" do not magically "link through a solid back-end" — linking *is* coupling. If the contract layer (events, schemas, versioning) is not designed, you get one of two failure modes: distributed chaos (independent but unlinkable) or a hidden monolith (linkable but not independent).
-   *Mitigation:* design the contract layer first: event catalog, schema versioning policy, contract tests.
-3. **No defined user, buyer, or business model.** The idea describes *architecture*, not *value*: who uses it daily, who pays, what pain does it remove? A company's real workflows are messy; without an anchor domain and a real user, every design decision stays abstract and unverifiable.
-   *Mitigation:* write a one-page problem statement per task: user, pain, current workaround, measurable win.
-4. **"Agents operate freely" is an unsafe assumption for a business system.** Free agent operation over company tasks = autonomous writes to business data, destructive commands, prompt-injection surface. Without permissions, sandboxing, approval gates, and audit logs, one bad agent run can corrupt operations or leak data.
-   *Mitigation:** least-privilege agent roles, dry-run mode by default, human approval for irreversible ops, immutable audit trail.
-5. **CLI-only UX caps adoption.** Business staff (accountants, operators, managers) will not live in a terminal. CLI-only means the system serves developers and agents, excluding the humans who validate the domain value — narrowing the market to tech-savvy firms.
-   *Mitigation:* headless core; CLI as power-user/agent surface, Web UI as thin client over the same API.
-6. **"Long-term" raises the maintenance floor.** A modular, evolvable, observable multi-component system costs more to operate than a simple app: cross-module monitoring, version drift management, dependency upgrades, contract test upkeep. Without CI/CD and testing discipline from day one, the adaptability goal quietly dies under technical debt.
-   *Mitigation:* automate fitness functions early (dependency-rule checks, smoke tests, IaC for reproducible environments).
-7. **AI reliability risk in business-critical paths.** Hallucinations, non-determinism, and model drift inside linked tasks can cascade (task B trusts task A's AI output). AI needs its own pipeline: evaluation, guardrails, fallback rules (see the MLOps lifecycle note).
+### Insight 8 — "Back-end vững chắc" chủ yếu là bài toán *tiến hoá dữ liệu*
+Liên kết tác vụ nghĩa là dữ liệu/event vượt qua ranh giới thành phần — nên **mọi thay đổi schema đều là thay đổi phá vỡ tiềm năng** cho consumer hạ nguồn. Một hệ thống liên kết trường tồn do đó cần, từ ngày đầu: schema registry, semantic versioning của hợp đồng, và chính sách deprecation ("version cũ được hỗ trợ trong N tháng"). "Vững chắc" không phải thuộc tính bạn cài đặt; nó là *kỷ luật versioning* bạn áp dụng trong nhiều năm. Bỏ lỡ điều này, back-end đóng băng — không ai dám đụng vào schema, và yêu cầu "thích ứng, dễ sửa" (4) âm thầm chết.
 
----
+### Insight 9 — Tích hợp AI biến chi phí một lần thành chi phí *theo thao tác*
+Một hệ thống nghiệp vụ do agent vận hành trả **chi phí biến đổi mỗi hành động** (tokens, lời gọi model, độ trễ). Hệ thống nghiệp vụ có lưu lượng cao. Bạn phải mô hình hoá **kinh tế đơn vị mỗi tác vụ**: chi phí/tác vụ, ngân sách độ trễ, ngân sách tỷ lệ lỗi, chi phí fallback. Một hệ thống modular đẹp, agent-operable tốn $0.50/tác vụ trên một thao tác có biên $0.05 là chết kinh tế. Ngoài ra, nhà cung cấp model thay đổi giá/mô hình/khả dụng một cách khó lường — hãy trừu tượng hoá lớp AI tại *giao diện* (tool schema trung lập nhà cung cấp + adapter mỏng), không phải bằng cách bọc từng tính năng hiếm.
 
-## 🚨 Risks to Acknowledge Before Committing (Rủi ro phải nhận)
+### Insight 10 — Bánh đà AI-vs-chuyên-gia có thể chạy ngược
+Lợi thế của ý tưởng = tri thức lĩnh vực + AI. Nhưng nếu AI dần thay thế *việc làm* của chuyên gia, dòng dữ liệu thực/đã-thẩm-định mới cạn kiệt, và AI trôi khỏi thực tế (concept drift). Quy trình phải giữ các chuyên gia lĩnh vực làm **người xác thực** (human-in-the-loop) — vì tín hiệu xác thực đó *chính là* dữ liệu đào tạo/eval của ngày mai. Thiết kế cổng kiểm con người ngay trong quy trình, không phải nghĩ thêm sau. Cũng nhớ: tri thức lĩnh vực nằm trong đầu chuyên gia; hệ thống bị con tin của người mã hoá nó đầu tiên — hãy lên kế hoạch khám phá lĩnh vực liên tục (phỏng vấn, quan sát công việc, khai thác log → thiết kế tác vụ mới).
 
-These are risks you *inherit by the nature of the idea itself* — acknowledge them now, or they surface later as surprises:
-
-1. **Bus-factor = 1 (single-builder syndrome).** A "large, long-term" system built mostly by one person concentrates all knowledge and energy in one head. If your priorities shift (graduation, first job, changing interests), the system has no one to carry it. *Acceptable only if* you treat "survivable without me for 6 months" as a real property: ADRs, module maps, small honest scope.
-2. **Prompt injection at business scale.** Agents that process third-party content (invoices, emails, partner documents) open an *indirect* prompt-injection surface: malicious instructions hidden inside business documents can make the agent exfiltrate data, approve payments, or delete records. This is the #1 AI-security risk for agentic business systems — not hypothetical. Mitigations: content/instruction separation, tool-level allowlists, least privilege, human approval on consequential actions.
-3. **Compliance & liability.** AI output driving real business decisions creates liability (wrong financial action, bad legal output, data leak). As a *product*, you inherit regulatory exposure (data protection, sector rules, possibly the EU AI Act). *Accept only with* a defined compliance scope, disclaimers, and an immutable audit trail.
-4. **Garbage-in-garbage-out amplification.** A linked system propagates errors automatically: bad data at task A contaminates B and C — that is literally what "linked" means. Data quality is a company-culture problem you cannot fully fix in code, yet your system will be blamed for data it didn't create. Mitigations: provenance tracking + validation gates at every boundary.
-5. **Vendor lock-in in the AI layer.** Providers change pricing/models/APIs under you. The "adaptable" part of your system must include a thin provider-neutral interface, or you accept recurring rework.
-6. **Technology decay.** Whatever you build on today will age; "easy to modify long-term" is a promise to future-you who will pay in refactoring. A long-lived system is a *subscription of effort*, not a one-off build — maintenance compounds every year.
-7. **Opportunity cost for a student.** This is a multi-year commitment. Each month on it is a month not spent on deeper ML courses, internships, or competing portfolio projects. *Accept it consciously*, or shrink v1 to one module + one customer.
-8. **Premature generic-ization.** Designing "independence/adaptability" *before* a concrete set of tasks usually produces wrong abstractions — and fixing wrong abstractions is the most expensive kind of rework. *Rule of three:* build concrete first; abstract only when a third real need appears.
-
-### Risk register summary
-
-| # | Risk | Inherent severity | Mitigable now? | Acceptable as-is? |
-|---|------|-------------------|----------------|-------------------|
-| 1 | Bus-factor = 1 | High | Partial (docs, small scope) | Conditional |
-| 2 | Prompt injection | Critical | Yes (design-time) | No — must be designed for |
-| 3 | Compliance & liability | High (if product) | Partial (legal review) | Conditional |
-| 4 | GIGO amplification | Medium | Partial (validation gates) | Conditional |
-| 5 | AI vendor lock-in | Medium | Yes (thin interface) | Yes — with thin adapter |
-| 6 | Technology decay | Medium | Partial (ADRs, options) | Yes — budget refactoring |
-| 7 | Opportunity cost | Personal | Yes (resize v1) | You decide |
-| 8 | Premature abstraction | High | Yes (rule of three) | No — must be disciplined |
+### Insight 11 — "Thích ứng thời cuộc" là mua quyền chọn, không phải tiên đoán
+Bạn không thể tiên đoán tương lai; kiến trúc nên mua **các quyền chọn (khả đảo ngược)** thay vì: feature flags, strangler patterns, ADR, và một hợp đồng lõi cố tình mỏng. Mọi cam kết không thể đảo ngược (schema, topology, tech stack) là một vụ cược — hãy đếm số cược và giới hạn chúng. Đây chính là tư duy "kiến trúc tiến hoá + fitness functions" đã có trong các ghi chú agile/kiến trúc của nhật ký.
 
 ---
 
-## 🏗️ Structural Critique (Đánh giá về KẾT CẤU)
+## ❓ Khoảng trống Cần Làm Rõ — Các Điểm Chưa Rõ (Điểm chưa được làm rõ)
 
-**What the structure gets right:**
-- Clear layering instinct: **system → tasks → components → interface (CLI) → intelligence (AI)**. The idea separates *what the system does* (tasks) from *how it's built* (independent components) from *how it's operated* (CLI/agents) — a healthy three-axis decomposition.
-- Non-functional requirements are named explicitly (independence, adaptability, modifiability, longevity). Most first-draft ideas only state functional goals; naming the *qualities* is how real architecture starts.
+Phát biểu ý tưởng để lại những điều này chưa giải quyết. Chúng là *vật cản thiết kế*, không phải câu hỏi về phong cách — mỗi cái đều thay đổi kiến trúc:
 
-**Structural problems:**
-1. **Priority order is missing.** Independence, adaptability, modifiability, and longevity *conflict* under pressure (e.g., ship-fast vs. clean boundaries). Architecture = making trade-offs explicit; without a ranked driver list, every future decision defaults to "whatever is fastest."
-2. **The data layer is absent from the structure.** Where does state live — shared database, database-per-component, event store? Component independence is mostly a *data ownership* question; leaving it out is the single biggest structural hole.
-3. **Security & identity are absent.** No mention of personas, roles, or permission boundaries — yet "agents operating freely" makes authorization the most load-bearing missing layer.
-4. **Observability is absent.** A distributed, linked, long-lived system without tracing/logging/metrics cannot be debugged or evolved; "solid back-end" without observability is unverifiable.
-5. **CLI sits at the wrong abstraction level.** The requirement mixes a *user interface* (CLI) with an *integration contract* (how agents call capabilities). Structurally, the clean shape is: `Core engine → API/protocol layer (MCP/OpenAPI) → {CLI, Web UI, Agent adapters}`. The CLI should be a *client of the protocol*, not the protocol itself.
+1. **Định danh neo đậu:** MỘT công ty cụ thể vs cả một nghề? (Quyết định multi-tenancy, tuỳ biến theo khách hàng, licensing, công sức.)
+2. **Độ hạt của tác vụ:** Hành động nguyên tử (một lệnh đơn) vs quy trình kéo dài (một case kéo dài nhiều ngày)? Orchestration khác biệt rất lớn (lời gọi đơn giản vs sagas có bù trừ).
+3. **Ngữ nghĩa "liên kết":** Luồng dữ liệu (đầu ra A nuôi B), luồng điều khiển (A kích hoạt B), hay cả hai? Và *chuyện gì xảy ra khi B thất bại sau khi A đã commit*? (hành vi bù trừ/rollback)
+4. **Phạm vi AI:** Chỉ generative, hay còn ML cổ điển (routing, dự báo, phân loại)? Tác vụ nào chấp nhận lỗi AI (đề xuất) so với cái không chấp nhận (hạch toán tài chính, đầu ra pháp lý)?
+5. **Mô hình operator CLI:** Chỉ con người, chỉ agent, hay cả hai với phân quyền khác nhau? Có role agent chỉ-đọc và role thực thi không? Mọi hành động agent có được log và có thể phê duyệt không?
+6. **Triển khai & nơi lưu trú dữ liệu:** Cloud / on-prem / hybrid? Cloud công cộng có thể không được phép với một số dữ liệu công ty (tài chính, y tế, dữ liệu kinh doanh bí mật; Nghị định 13/2023 của Việt Nam về bảo vệ dữ liệu cá nhân).
+7. **Hạng nhạy cảm của dữ liệu:** PII, tài chính, y tế, bí mật thương mại? → quyết định phạm vi tuân thủ (quy tắc bảo vệ dữ liệu, quy định ngành, có thể EU AI Act nếu từng phơi bày cho người dùng EU).
+8. **Công cụ hiện có:** Người dùng mục tiêu đang chạy gì hôm nay (Excel, ERP, CRM, email)? Hệ thống thay thế, bổ sung, hay import/export với chúng? — Adapter tích hợp thường là 50–80% thời gian dự án ẩn.
+9. **Tiêu chí thành công v1:** Kết quả đo được nào chứng minh ý tưởng? (ví dụ: thời gian tác vụ −60%, tỷ lệ lỗi −40%, chi phí/tác vụ dưới X) Không có con số, "hệ thống lớn" mãi không kiểm chứng được.
+10. **Quyền sở hữu "chuyên môn":** Tri thức lĩnh vực là của bạn, của đối tác, hay phải học? Hào cạnh tranh ~90% là hiểu lĩnh vực, ~10% là code.
+11. **Mô hình kinh doanh (nếu là product):** per-seat, per-task, license, theo-kết-quả?
+12. **Vai trò con người sau tự động hoá:** Bước nào *phải* do con người, và điều đó được ràng buộc thế nào? (trách nhiệm pháp lý, niềm tin, quy định)
 
-**Corrected structural sketch:**
+---
+
+## ✅ Điểm mạnh (Điểm tốt)
+
+1. **Chuyên biệt lĩnh vực là hào cạnh tranh thật.** Nền tảng ngang tổng quát thì chật chội và hàng hoá hoá; một hệ thống tinh chỉnh theo quy trình của một nghề có chi phí chuyển đổi sâu, ROI rõ ràng và khó bị thay thế. Dọc đánh bại ngang với một người xây nhỏ.
+2. **Độc lập thành phần là default đúng.** Nó mua cô lập lỗi, triển khai độc lập, làm việc song song của đội, và tự do công nghệ mỗi thành phần — trực tiếp chống lại "big ball of mud" giết chết các hệ thống nội bộ trường tồn.
+3. **Tích hợp trước ("back-end vững chắc") là bản năng chín chắn.** Nhiều ý tưởng solo nhảy vào UI trước; cái này đặt đúng mô liên kết (luồng dữ liệu, liên kết tác vụ) làm trung tâm — phần quyết định hệ thống có vượt ngoài demo hay không.
+4. **CLI agent-native đi trước xu hướng.** Thiết kế mọi khả năng vận hành được bằng máy (I/O có cấu trúc, tool schemas) khớp với sự dịch chuyển agentic-workflow 2025–2026 (MCP, function calling). Hệ thống được thiết kế *cho agents* sẽ tự động hoá được chặt chẽ hơn hẳn hệ thống retrofit.
+5. **Khả năng tiến hoá dài hạn được ưu tiên.** Chủ động coi trọng "thích ứng thời cuộc, dễ sửa, lâu dài" nghĩa là thiết kế bắt đầu từ khả năng bảo trì thay vì coi nó là điều nghĩ thêm — khác biệt giữa tài sản 5 năm và bản viết lại 6 tháng.
+6. **Rất khả thi với bộ kỹ năng hiện tại.** Kinh nghiệm Backend + AI/ML + CLI/TUI (xem dự án Custom Multi-TUI) + ghi chú DevOps (IaC, MLOps) bao phủ gần như mọi lớp ý tưởng này cần. Đây là một dự án tham vọng nhưng *đạt được*, không phải vapourware.
+
+---
+
+## ⚠️ Điểm yếu & Rủi ro (Điểm xấu)
+
+1. **Bùng nổ phạm vi / cái bẫy "hệ thống lớn".** "Lớn + chuyên biệt + AI + CLI + lâu dài" mà chưa có lĩnh vực cụ thể đầu tiên là cái bẫy v1 kinh điển: mọi thứ đều khả thi, không gì ra đời. Không có một lát cắt khởi đầu có giới hạn, dự án phình ra hoặc đình trệ.
+   *Giảm thiểu:* chọn MỘT lĩnh vực công ty thật + 3 tác vụ cụ thể cho v0; phát triển qua strangler pattern.
+2. **Mâu thuẫn độc lập-vs-tích hợp chưa được giải quyết.** Các thành phần "độc lập cao" không tự nhiên "liên kết qua back-end vững chắc" — liên kết *chính là* coupling. Nếu lớp hợp đồng (events, schemas, versioning) không được thiết kế, bạn có một trong hai chế độ lỗi: hỗn loạn phân tán (độc lập nhưng không liên kết được) hoặc monolith ẩn (liên kết được nhưng không độc lập).
+   *Giảm thiểu:* thiết kế lớp hợp đồng trước: event catalog, chính sách schema versioning, contract tests.
+3. **Không có người dùng, người mua, hay mô hình kinh doanh được định nghĩa.** Ý tưởng mô tả *kiến trúc*, không phải *giá trị*: ai dùng hàng ngày, ai trả tiền, nỗi đau nào được loại bỏ? Quy trình thực của công ty bừa bộn; thiếu lĩnh vực neo đậu và người dùng thật, mọi quyết định thiết kế vẫn trừu tượng và không kiểm chứng được.
+   *Giảm thiểu:* viết một trang phát biểu vấn đề cho mỗi tác vụ: người dùng, nỗi đau, cách đối phó hiện tại, thắng-lợi đo lường được.
+4. **"Agents vận hành tự do" là giả định không an toàn cho hệ thống nghiệp vụ.** Vận hành agent tự do trên tác vụ công ty = ghi dữ liệu nghiệp vụ tự trị, lệnh phá hoại, bề mặt prompt-injection. Không có phân quyền, sandboxing, cổng phê duyệt và log kiểm toán, một lượt agent tồi có thể làm hỏng vận hành hoặc rò rỉ dữ liệu.
+   *Giảm thiểu:* role agent quyền-tối-thiểu, dry-run mặc định, phê duyệt con người cho thao tác không thể đảo ngược, nhật ký kiểm toán bất biến.
+5. **UX chỉ-CLI giới hạn sự chấp nhận.** Nhân sự nghiệp vụ (kế toán, operator, quản lý) sẽ không sống trong terminal. Chỉ-CLI nghĩa là hệ thống phục vụ developer và agent, loại trừ những con người xác thực giá trị lĩnh vực — thu hẹp thị trường xuống các công ty rành kỹ thuật.
+   *Giảm thiểu:* core không đầu; CLI là bề mặt power-user/agent, Web UI là client mỏng trên cùng API.
+6. **"Lâu dài" nâng sàn bảo trì.** Một hệ thống đa thành phần modular, tiến hoá được, quan sát được tốn kém hơn để vận hành so với app đơn giản: giám sát liên module, quản lý trôi dạt version, nâng cấp dependency, bảo trì contract test. Không có CI/CD và kỷ luật testing từ ngày đầu, mục tiêu thích ứng âm thầm chết dưới nợ kỹ thuật.
+   *Giảm thiểu:* tự động hoá fitness functions sớm (kiểm tra dependency rules, smoke tests, IaC cho môi trường tái lập).
+7. **Rủi ro độ tin cậy AI trong đường tới hạn nghiệp vụ.** Ảo giác, phi tất định, và trôi dạt mô hình bên trong tác vụ liên kết có thể thác đổ (task B tin đầu ra AI của task A). AI cần pipeline riêng: evaluation, guardrails, quy tắc fallback (xem ghi chú MLOps lifecycle).
+
+---
+
+## 🚨 Rủi ro phải Nhận biết Trước khi Cam kết (Rủi ro phải nhận)
+
+Đây là những rủi ro bạn *thừa hưởng do bản chất của chính ý tưởng* — hãy nhận biết ngay, hoặc chúng sẽ nổi lên sau này như bất ngờ:
+
+1. **Bus-factor = 1 (hội chứng người-xây-đơn độc).** Một hệ thống "lớn, lâu dài" do phần lớn một người xây tập trung toàn bộ tri thức và năng lượng vào một cái đầu. Nếu ưu tiên của bạn đổi (tốt nghiệp, công việc đầu, sở thích đổi), hệ thống không ai tiếp quản. *Chỉ chấp nhận nếu* bạn coi "sống sót khi không có tôi 6 tháng" là một thuộc tính thật: ADR, bản đồ module, phạm vi nhỏ trung thực.
+2. **Prompt injection ở quy mô nghiệp vụ.** Agent xử lý nội dung bên thứ ba (hồ sơ khách hàng — bản scan CCCD, ảnh chứng minh thu nhập, tài liệu đối tác) mở một bề mặt prompt-injection *gián tiếp*: chỉ thị độc hại giấu bên trong tài liệu nghiệp vụ có thể khiến agent trích xuất dữ liệu, phê duyệt khoản vay, hoặc kích hoạt giải ngân. Đây là rủi ro an ninh AI #1 cho hệ thống nghiệp vụ agentic — không phải giả thuyết. Giảm thiểu: tách nội dung/chỉ thị, allowlist cấp tool, quyền tối thiểu, phê duyệt con người cho hành động hệ trọng.
+3. **Tuân thủ & trách nhiệm pháp lý.** Đầu ra AI điều khiển quyết định nghiệp vụ thật tạo trách nhiệm pháp lý (hành động tài chính sai, đầu ra pháp lý tồi, rò rỉ dữ liệu). Là một *product*, bạn thừa hưởng phơi nhiễm quy định (bảo vệ dữ liệu, quy tắc ngành, có thể EU AI Act). *Chỉ chấp nhận khi* có phạm vi tuân thủ định nghĩa rõ, tuyên bố từ chối trách nhiệm, và nhật ký kiểm toán bất biến.
+4. **Khuếch đại garbage-in-garbage-out.** Hệ thống liên kết tự động truyền lỗi: dữ liệu tồi ở task A làm ô nhiễm B và C — đó đúng nghĩa là "liên kết". Chất lượng dữ liệu là vấn đề văn hoá công ty bạn không thể sửa trọn trong code, mà hệ thống của bạn lại bị đổ lỗi cho dữ liệu nó không tạo ra. Giảm thiểu: theo dõi provenance + cổng xác thực ở mọi ranh giới.
+5. **Lock-in nhà cung cấp ở lớp AI.** Nhà cung cấp đổi giá/mô hình/API ngay dưới bạn. Phần "thích ứng" của hệ thống phải gồm một giao diện mỏng trung lập nhà cung cấp, hoặc bạn chấp nhận làm lại định kỳ.
+6. **Mục nát công nghệ.** Thứ bạn xây hôm nay sẽ già đi; "dễ sửa lâu dài" là lời hứa với future-bạn người sẽ trả giá bằng refactoring. Một hệ thống trường tồn là một *đăng ký nỗ lực*, không phải bản xây một lần — bảo trì cộng dồn mỗi năm.
+7. **Chi phí cơ hội cho một sinh viên.** Đây là cam kết nhiều năm. Mỗi tháng cho nó là một tháng không dành cho các khoá ML sâu hơn, thực tập, hoặc dự án portfolio cạnh tranh. *Chấp nhận nó có ý thức*, hoặc thu nhỏ v1 xuống một module + một khách hàng.
+8. **Tổng quát hoá sớm (premature generic-ization).** Thiết kế "độc lập/thích ứng" *trước* một tập tác vụ cụ thể thường sinh ra các trừu tượng sai — và sửa trừu tượng sai là loại làm-lại đắt nhất. *Quy tắc ba:* xây cụ thể trước; chỉ trừu tượng hoá khi nhu cầu thứ ba thật xuất hiện.
+
+### Bảng tổng hợp sổ rủi ro
+
+| # | Rủi ro | Mức độ nghiêm trọng nội tại | Giảm thiểu được ngay? | Chấp nhận nguyên trạng? |
+|---|------|---------------------------|------------------------|-------------------------|
+| 1 | Bus-factor = 1 | Cao | Một phần (docs, phạm vi nhỏ) | Có điều kiện |
+| 2 | Prompt injection | Nghiêm trọng | Có (lúc thiết kế) | Không — phải thiết kế để đối phó |
+| 3 | Tuân thủ & trách nhiệm pháp lý | Cao (nếu product) | Một phần (rà soát pháp lý) | Có điều kiện |
+| 4 | Khuếch đại GIGO | Trung bình | Một phần (cổng xác thực) | Có điều kiện |
+| 5 | Lock-in nhà cung cấp AI | Trung bình | Có (giao diện mỏng) | Có — với adapter mỏng |
+| 6 | Mục nát công nghệ | Trung bình | Một phần (ADR, quyền chọn) | Có — ngân sách refactoring |
+| 7 | Chi phí cơ hội | Cá nhân | Có (thu nhỏ v1) | Bạn tự quyết |
+| 8 | Trừu tượng sớm | Cao | Có (quy tắc ba) | Không — phải kỷ luật |
+
+---
+
+## 🏗️ Đánh giá Kết cấu (Đánh giá về KẾT CẤU)
+
+**Kết cấu làm đúng điều gì:**
+- Bản năng phân lớp rõ ràng: **hệ thống → tác vụ → thành phần → giao diện (CLI) → trí tuệ (AI)**. Ý tưởng tách *hệ thống làm gì* (tác vụ) khỏi *nó được xây thế nào* (các thành phần độc lập) khỏi *nó được vận hành ra sao* (CLI/agents) — một phân rã ba trục khoẻ mạnh.
+- Các yêu cầu phi chức năng được nêu tường minh (độc lập, thích ứng, khả sửa, trường tồn). Hầu hết ý tưởng bản nháp đầu chỉ nêu mục tiêu chức năng; nêu tên các *phẩm chất* là cách kiến trúc thật sự bắt đầu.
+
+**Các vấn đề kết cấu:**
+1. **Thiếu thứ tự ưu tiên.** Độc lập, thích ứng, khả sửa, và trường tồn *xung đột* khi chịu áp lực (ví dụ: ship-nhanh vs ranh giới sạch). Kiến trúc = làm tường minh các đánh đổi; không có danh sách trình điều khiển được xếp hạng, mọi quyết định tương lai mặc định thành "cái gì nhanh nhất".
+2. **Lớp dữ liệu vắng mặt trong kết cấu.** Trạng thái sống ở đâu — shared database, database-per-component, event store? Độc lập thành phần chủ yếu là câu hỏi *sở hữu dữ liệu*; bỏ nó ra là lỗ hổng kết cấu lớn nhất.
+3. **Bảo mật & identity vắng mặt.** Không nhắc persona, role, hay ranh giới quyền — trong khi "agents vận hành tự do" làm cho authorization trở thành lớp thiếu chịu lực nhất.
+4. **Observability vắng mặt.** Hệ thống phân tán, liên kết, trường tồn không có tracing/logging/metrics thì không debug hay tiến hoá được; "back-end vững chắc" không observability là không kiểm chứng được.
+5. **CLI nằm sai mức trừu tượng.** Yêu cầu trộn một *giao diện người dùng* (CLI) với một *hợp đồng tích hợp* (agent gọi khả năng thế nào). Về kết cấu, hình dạng sạch là: `Core engine → Lớp API/protocol (MCP/OpenAPI) → {CLI, Web UI, Agent adapters}`. CLI nên là *client của giao thức*, không phải chính giao thức.
+
+**Phác thảo kết cấu đã sửa:**
 ```
                     ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-   Thin clients →   │  CLI (human/ │  │   Web UI     │  │ Agent adapter│
-                    │  agent)      │  │ (business)   │  │ (MCP/tools)  │
+   Client mỏng →    │  CLI (người/ │  │   Web UI     │  │ Agent adapter│
+                    │  agent)      │  │ (nghiệp vụ)  │  │ (MCP/tools)  │
                     └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
                            └─────────────────┼─────────────────┘
                                              ▼
                           ┌────────────────────────────────────┐
-                          │  API + Protocol layer (contract,   │
+                          │  Lớp API + Giao thức (hợp đồng,    │
                           │  auth, versioning, audit)          │
                           └────────────────┬───────────────────┘
                                              ▼
-   Independent components (bounded contexts, DB-per-context)
-   [Task A] ──event──▶ [Task B] ──event──▶ [Task C]   ← integration backbone
+   Các thành phần độc lập (bounded contexts, DB-per-context)
+   [Task A] ──event──▶ [Task B] ──event──▶ [Task C]   ← backbone tích hợp
                                              ▼
                           ┌────────────────────────────────────┐
-                          │  Cross-cutting: observability,     │
-                          │  AI services, identity/permissions │
+                          │  Xuyên suốt: observability,        │
+                          │  dịch vụ AI, identity/phân quyền   │
                           └────────────────────────────────────┘
 ```
 
 ---
 
-## 🧠 Reasoning Critique (Đánh giá về KHẢ NĂNG TƯ DUY)
+## 🧠 Đánh giá Lập luận (Đánh giá về KHẢ NĂNG TƯ DUY)
 
-**Where the thinking is strong:**
-1. **Systems-level framing.** The idea reasons about a *whole system* (components, linkage, interface, evolution) rather than a single feature — genuine architectural instinct, not feature-listing.
-2. **Non-functional awareness.** Valuing independence, adaptability, and longevity shows awareness of software *qualities*, which is the hallmark of mature engineering thinking (most beginners optimize only for "it works").
-3. **Future-orientation.** Anchoring on agents + AI integration shows the idea is designed for where the industry is going (agent-operable systems), not where it has been.
-4. **Consistency with real experience.** The multi-repo independence trade-off already chosen in the Custom TUI project (accepting code duplication for absolute independence) is the same philosophy at a larger scale — the reasoning generalizes correctly.
+**Nơi tư duy mạnh:**
+1. **Khung tầm hệ thống.** Ý tưởng suy luận về một *hệ thống toàn thể* (thành phần, liên kết, giao diện, tiến hoá) thay vì một tính năng đơn lẻ — bản năng kiến trúc thật, không phải liệt kê tính năng.
+2. **Nhận thức phi chức năng.** Coi trọng độc lập, thích ứng, trường tồn cho thấy nhận thức về các *phẩm chất* phần mềm — dấu hiệu của tư duy kỹ thuật chín chắn (hầu hết người mới chỉ tối ưu "nó chạy").
+3. **Hướng tương lai.** Neo vào agents + tích hợp AI cho thấy ý tưởng được thiết kế cho nơi ngành công nghiệp đang đi (hệ thống agent-operable), không phải nơi nó đã qua.
+4. **Nhất quán với kinh nghiệm thực.** Thương vụ độc lập đa-repo đã chọn trong dự án Custom TUI (chấp nhận trùng lặp code để có độc lập tuyệt đối) là cùng triết lý ở quy mô lớn hơn — lập luận tổng quát hoá đúng.
 
-**Where the thinking breaks down:**
-1. **Abstraction without an anchor.** The idea floats at the "large system" level with no concrete domain, tasks, or users named. Thinking that never touches a specific example cannot be tested — and untestable requirements ("adapt to the times") quietly become unachievable.
-2. **A contradiction is left unexamined.** "Highly independent components" + "tasks interlinked through a solid back-end" + "one large system" pull in opposite directions. The idea *asserts* they coexist but never asks *how* — that missing "how" (the contract layer) is where 80% of the real work lives.
-3. **"Free" is confused with "capable."** "Thao tác tự do" (operate freely) mistakes unconstrained access for agent capability. In reality, agents are *more* capable inside well-specified permission boundaries (they know what they may do) than in an open field (they must guess, and guessing = risk). This is a governance blind spot, not just a security one.
-4. **Tool conflation:** CLI ≈ agent interface. The reasoning jumps from "agents need to operate it" to "therefore CLI," skipping the question of *what agents actually consume* (schemas, structured output, protocols). The CLI is a good *part* of the answer, not the answer.
-5. **"Large" is treated as a virtue, not a cost.** Nothing in the idea weighs the carrying cost of largeness (ops burden, coordination overhead, slower refactors). Longevity thinking should first ask *"what is the smallest system that still delivers the value?"*
+**Nơi tư duy sụp đổ:**
+1. **Trừu tượng không có neo đậu.** Ý tưởng lơ lửng ở mức "hệ thống lớn" mà không nêu tên lĩnh vực, tác vụ, hay người dùng cụ thể. Tư duy không bao giờ chạm ví dụ cụ thể thì không thể kiểm chứng — và yêu cầu không kiểm chứng được ("thích ứng thời cuộc") âm thầm trở nên không đạt được.
+2. **Một mâu thuẫn không được soi xét.** "Các thành phần độc lập cao" + "các tác vụ liên kết qua back-end vững chắc" + "một hệ thống lớn" kéo về ba hướng đối nhau. Ý tưởng *khẳng định* chúng cùng tồn tại nhưng không bao giờ hỏi *bằng cách nào* — cái "bằng cách nào" còn thiếu (lớp hợp đồng) chính là nơi 80% công việc thực nằm.
+3. **"Tự do" bị nhầm với "đủ năng lực".** "Thao tác tự do" nhầm truy cập không ràng buộc với năng lực agent. Trong thực tế, agents *năng lực hơn* bên trong ranh giới quyền được chỉ định rõ (chúng biết mình được làm gì) hơn là một bãi mở (chúng phải đoán, và đoán = rủi ro). Đây là điểm mù quản trị, không chỉ bảo mật.
+4. **Nhầm lẫn công cụ:** CLI ≈ giao diện agent. Lập luận nhảy từ "agents cần vận hành nó" đến "vậy nên CLI", bỏ qua câu hỏi *agent thực sự tiêu thụ cái gì* (schemas, đầu ra có cấu trúc, giao thức). CLI là một *phần* tốt của câu trả lời, không phải câu trả lời.
+5. **"Lớn" được xem như đức tính, không phải chi phí.** Không gì trong ý tưởng cân nhắc chi phí duy mang của sự lớn (gánh nặng vận hành, chi phí phối hợp, refactor chậm hơn). Tư duy trường tồn nên hỏi trước *"hệ thống nhỏ nhất vẫn mang lại giá trị là gì?"*
 
-**Net assessment of reasoning:** directionally excellent (right concerns, right future), but currently **assertive rather than analytic** — it states desired properties without resolving their tensions. Converting each "I want X" into "X is achieved by Y, verified by Z" would lift this from a vision to an architecture.
-
----
-
-## 🎯 Decisions to Make Before Writing Any Code
-
-- [ ] Pick ONE anchor domain (specific company/profession) + 3 concrete tasks for v0.
-- [ ] Product vs internal platform? (multi-tenant or not)
-- [ ] Draw the task graph: which tasks must link, and what data crosses boundaries.
-- [ ] Choose the integration backbone: event bus / queue / REST orchestration — and define "solid" (delivery guarantees, ordering, retries).
-- [ ] Choose data ownership model: database-per-component vs shared store.
-- [ ] AI mode priority: embedded AI vs orchestrator vs operator (Insight 5).
-- [ ] Agent protocol: CLI with `--json` + MCP server? Define permission roles & approval gates.
-- [ ] Ranking of quality drivers (independence vs speed vs cost) — the trade-off order.
-- [ ] Start as modular monolith? Set the fitness functions that trigger a split later.
-- [ ] Contract versioning policy: schema registry, semantic versioning, deprecation windows.
-- [ ] Data classification & regulator scope: PII / financial / health? Which compliance rules apply (e.g., Decree 13/2023, sector rules)?
-- [ ] Agent safety model: permission roles, read-only vs execute agent, approval gates, audit trail.
-- [ ] AI-provider abstraction level (keep it thin) + unit economics: budget per task (tokens, latency, error rate, fallback cost).
-- [ ] Human-in-the-loop design: which steps stay human-validated, and how validation feeds future training/eval data.
+**Kết luận đánh giá lập luận:** định hướng xuất sắc (đúng mối quan tâm, đúng tương lai), nhưng hiện tại mang tính **khẳng định hơn là phân tích** — nó phát biểu các thuộc tính mong muốn mà không giải quyết các căng thẳng của chúng. Chuyển từng "Tôi muốn X" thành "X đạt được bởi Y, kiểm chứng bởi Z" sẽ nâng nó từ tầm nhìn lên kiến trúc.
 
 ---
 
-## 📝 Research Journey
+## 🎯 Các Quyết định Cần Chốt Trước Khi Viết Code
 
-- **Why:** I keep circling back to the same shape of project — a company-scale system where tasks interconnect but each part stays independent and AI can operate it. Capturing it properly (instead of letting it stay a vague "someday" idea) forces me to confront whether I actually understand how such systems are built, or only like how they sound.
-- **Struggle:** The hardest part was the apparent contradiction between *independence* and *linkage*. For a long time I assumed "more independent = better," without realizing independence without contracts is just fragmentation — and linkage without discipline is just a monolith wearing a costume.
-- **Aha moments:** (1) Independence is bought with **stable interfaces + data ownership**, not with physical separation. (2) A CLI is the *shell*, but agents really need a **protocol** (schemas/MCP) — realizing this reframed "CLI for agents" into "agent-native platform, CLI as one face of it." (3) "Adaptability" is a *discipline* (tests, CI, ADRs), not a property you can finish.
-- **Career link:** This is precisely the AI Engineer shape of product I want to build in Economics/Business: a vertical business platform whose workflows are AI-augmented and whose every capability is agent-callable. Designing governed, observable, agent-operable systems is the exact intersection of my backend, AI, and DevOps notes — and the differentiator I want on my CV/portfolio.
-
----
-
-## 🔗 Related Topics
-
-**In this repo:**
-- [02-event-driven-architecture-and-task-orchestration.md](02-event-driven-architecture-and-task-orchestration.md) — implements requirement #2 ("tasks interlink through a solid back-end").
-- [03-modular-monolith-vs-microservices.md](03-modular-monolith-vs-microservices.md) — resolves requirement #3 (component independence vs integration).
-- [04-mcp-and-function-calling-agent-interfaces.md](04-mcp-and-function-calling-agent-interfaces.md) — implements requirement #6 (CLI → governed agent protocol).
-
-**Source of truth (Researching Diary, external):**
-- `random_ideas/04-custom-tui-project.md` — the agent-interface instinct one level down (TUI/CLI for AGY & Opencode).
-- `random_ideas/05-projects-review-blindsight-snakeann-joblink.md` — Joblink's feature-based modular structure + layered security as concrete precedent.
-- `iot_aiot/03-hardware-abstraction-layer-hal.md` — independence through abstraction at hardware level.
-- `ai_ml/05-mlops-lifecycle-and-deployment-architecture.md` — long-term operability of the AI parts of the task chain.
-- `git_github/11-infrastructure-as-code-and-devops-automation.md` — reproducible environments for a long-lived system.
-- `books_summaries/agile_project_management/notes/07-agile-architecture-hal-refactoring-scaling.md` — evolutionary architecture & scaling frameworks.
-
-**[SUGGESTED] follow-ups:** event-driven backbone (→ doc 02) and bounded-context discovery for banking — KYC / payments / ledger / AML-approval before writing modules (→ doc 03).
+- [x] Chọn MỘT lĩnh vực neo đậu + tác vụ cụ thể cho v0 → **cho vay tiêu dùng (chuẩn HomeCredit), v0 = vay tiền mặt online** *(đã giải quyết 2026-09-24)*.
+- [ ] Product vs nền tảng nội bộ? (multi-tenant hay không) — mặc định: hệ thống học tập single-tenant.
+- [x] Vẽ task graph: tác vụ nào liên kết, dữ liệu nào vượt ranh giới → **chuỗi vòng đời khoản vay** trong docs 02–03.
+- [ ] Chọn backbone tích hợp: event bus / queue / REST orchestration — và định nghĩa "vững chắc" (đảm bảo phân phối, thứ tự, retries).
+- [ ] Chọn mô hình sở hữu dữ liệu: database-per-component vs shared store.
+- [ ] Ưu tiên AI mode: embedded AI vs orchestrator vs operator (Insight 5).
+- [ ] Giao thức agent: CLI với `--json` + MCP server? Định nghĩa role phân quyền & cổng phê duyệt.
+- [ ] Xếp hạng trình điều khiển chất lượng (độc lập vs tốc độ vs chi phí) — thứ tự đánh đổi.
+- [ ] Bắt đầu bằng modular monolith? Đặt fitness functions kích hoạt việc tách sau này.
+- [ ] Chính sách versioning hợp đồng: schema registry, semantic versioning, cửa sổ deprecation.
+- [ ] Phân loại dữ liệu & phạm vi cơ quan quản lý: PII / tài chính / y tế? Quy tắc tuân thủ nào áp dụng (ví dụ: Nghị định 13/2023, quy tắc ngành)?
+- [ ] Mô hình an toàn agent: role quyền hạn, agent chỉ-đọc vs thực thi, cổng phê duyệt, nhật ký kiểm toán.
+- [ ] Mức trừu tượng hoá nhà cung cấp AI (giữ mỏng) + kinh tế đơn vị: ngân sách mỗi tác vụ (tokens, độ trễ, tỷ lệ lỗi, chi phí fallback).
+- [ ] Thiết kế human-in-the-loop: bước nào giữ người xác thực, và sự xác thực nuôi dữ liệu đào tạo/eval tương lai ra sao.
 
 ---
 
-## 🤔 Open Questions
+## 📝 Hành trình Nghiên cứu
 
-- [ ] Which specific company domain anchors v0 — and what are its 3 most automatable tasks?
-- [ ] Product (vertical SaaS) or internal platform? How does that change the data model?
-- [ ] What delivery guarantees make the back-end "solid" enough for this domain (ordering? latency? at-least-once?)?
-- [ ] How do agent permissions map to component boundaries (role = set of allowed tools)?
-- [ ] What is the fallback when the AI component is wrong — and how does the audit log capture it?
-- [ ] Which quality driver wins when they conflict: independence, speed of delivery, or cost?
-- [ ] What are the unit economics per task (tokens, latency, cost/task) — is the margin still positive at real business volume?
-- [ ] When the AI is wrong on a consequential action, who is accountable — and what exactly does the audit trail prove?
+- **Tại sao:** Tôi cứ quay vòng về cùng một hình dạng dự án — một hệ thống quy mô công ty nơi các tác vụ liên kết nhưng mỗi phần vẫn độc lập và AI có thể vận hành nó. Ghi lại nó đúng cách (thay vì để nó mãi là ý tưởng "một ngày nào đó" mơ hồ) buộc tôi đối mặt với việc liệu tôi có thực sự hiểu cách xây các hệ thống như vậy, hay chỉ thích cách chúng nghe.
+- **Vật lộn:** Phần khó nhất là mâu thuẫn bề ngoài giữa *độc lập* và *liên kết*. Trong một thời gian dài tôi giả định "độc lập hơn = tốt hơn", mà không nhận ra độc lập không có hợp đồng chỉ là phân mảnh — và liên kết không kỷ luật chỉ là monolith mặc trang phục.
+- **Khoảnh khắc à-ha:** (1) Độc lập được mua bằng **giao diện ổn định + sở hữu dữ liệu**, không phải tách biệt vật lý. (2) CLI là *vỏ*, nhưng agent thực sự cần một **giao thức** (schemas/MCP) — nhận ra điều này đổi khung "CLI cho agents" thành "nền tảng agent-native, CLI là một mặt của nó". (3) "Khả năng thích ứng" là một *kỷ luật* (tests, CI, ADR), không phải thuộc tính bạn hoàn tất.
+- **Liên kết sự nghiệp:** Đây chính xác là hình dạng sản phẩm AI Engineer tôi muốn xây trong Kinh tế/Kinh doanh: một nền tảng nghiệp vụ dọc mà quy trình của nó được AI nâng cấp và mọi khả năng đều agent-callable. Thiết kế hệ thống có quản trị, quan sát được, agent-operable là điểm giao chính xác của các ghi chú backend, AI và DevOps của tôi — và là điểm khác biệt tôi muốn trên CV/portfolio.
 
 ---
-*Idea quality is measured by the tension it resolves, not the features it lists.*
+
+## 🔗 Chủ đề Liên quan
+
+**Trong repo này:**
+- [02-event-driven-architecture-and-task-orchestration.md](02-event-driven-architecture-and-task-orchestration.md) — triển khai yêu cầu #2 ("các tác vụ liên kết thông qua một back-end vững chắc").
+- [03-modular-monolith-vs-microservices.md](03-modular-monolith-vs-microservices.md) — giải quyết yêu cầu #3 (độc lập thành phần vs tích hợp).
+- [04-mcp-and-function-calling-agent-interfaces.md](04-mcp-and-function-calling-agent-interfaces.md) — triển khai yêu cầu #6 (CLI → giao thức agent có kiểm soát).
+
+**Nguồn gốc sự thật (Nhật ký Nghiên cứu, bên ngoài):**
+- `random_ideas/04-custom-tui-project.md` — bản năng giao diện agent một cấp thấp hơn (TUI/CLI cho AGY & Opencode).
+- `random_ideas/05-projects-review-blindsight-snakeann-joblink.md` — cấu trúc modular theo tính năng của Joblink + bảo mật phân lớp như tiền lệ cụ thể.
+- `iot_aiot/03-hardware-abstraction-layer-hal.md` — độc lập thông qua trừu tượng hoá ở cấp phần cứng.
+- `ai_ml/05-mlops-lifecycle-and-deployment-architecture.md` — khả năng vận hành dài hạn của các phần AI trong chuỗi tác vụ.
+- `git_github/11-infrastructure-as-code-and-devops-automation.md` — môi trường tái lập cho một hệ thống trường tồn.
+- `books_summaries/agile_project_management/notes/07-agile-architecture-hal-refactoring-scaling.md` — kiến trúc tiến hoá & khung scaling.
+
+**[ĐỀ XUẤT] bước tiếp theo:** backbone hướng sự kiện (→ doc 02) và khám phá bounded context cho cho vay tiêu dùng — KYC/onboarding, application, credit decisioning, contracting, disbursement, loan servicing, ledger, reporting (→ doc 03).
+
+---
+
+## 🤔 Câu hỏi Mở
+
+- [x] **Lĩnh vực neo đậu (Gap #1):** công ty tài chính tiêu dùng, chuẩn Home Credit Việt Nam → *đã giải quyết 2026-09-24*. Lát cắt v0 = vay tiền mặt online.
+- [ ] Những luồng con *cụ thể* nào của vay tiền mặt online tạo thành các bước saga của v0 (kênh giải ngân? quy tắc định giá/kỳ hạn? chính sách referral sang duyệt thủ công)?
+- [ ] Product (vertical SaaS) hay nền tảng nội bộ? Điều đó đổi mô hình dữ liệu thế nào? *(hệ thống học tập single-tenant — xem lại nếu từng product hoá)*
+- [ ] Đảm bảo phân phối nào làm back-end "vững chắc" đủ khi tiền di chuyển (giải ngân/trả nợ exactly-once, đối soát với adapter ngân hàng/e-wallet)?
+- [ ] Quyền agent ánh xạ sang ranh giới thành phần thế nào (role = tập tool được phép)?
+- [ ] Fallback khi thành phần AI sai (ví dụ: trích xuất tài liệu KYC) là gì — và log kiểm toán ghi lại nó ra sao?
+- [ ] Trình điều khiển chất lượng nào thắng khi xung đột: độc lập, tốc độ giao hàng, hay chi phí?
+- [ ] Kinh tế đơn vị mỗi tác vụ (tokens, độ trễ, chi phí/tác vụ) trên một khoản vay 1–40 triệu VND với SLA duyệt 3 phút là gì?
+- [ ] Khi AI sai trong một hành động hệ trọng (phê duyệt/giải ngân), ai chịu trách nhiệm — và hành trình kiểm toán chứng minh chính xác điều gì?
+
+---
+*Chất lượng của một ý tưởng được đo bằng những mâu thuẫn mà nó giải quyết được, không phải bằng danh sách tính năng của nó.*

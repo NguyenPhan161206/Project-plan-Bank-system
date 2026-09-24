@@ -1,218 +1,218 @@
-# MCP & Function Calling — Designing Interfaces for AI Agents
+# MCP & Function Calling — Thiết kế Giao diện cho AI Agents
 
-**Created Date:** 2026-09-23
-**Last Updated:** 2026-09-23
+**Ngày tạo:** 2026-09-23
+**Cập nhật lần cuối:** 2026-09-23
 **Tags:** `#AIAgents`, `#MCP`, `#FunctionCalling`, `#ToolUse`, `#AgentInterfaces`, `#LLM`, `#StructuredOutput`
-**References:** [Model Context Protocol (Anthropic)](https://modelcontextprotocol.io/), [OpenAI Function Calling docs](https://platform.openai.com/docs/guides/function-calling), [JSON Schema](https://json-schema.org/), [Ollama Tools](https://docs.ollama.com/guides/function-calling)
-**Status:** Published
-**Difficulty:** Intermediate
-**Project:** Modular Bank Operations System — the governed agent interface (MCP + CLI `--json`) through which AI agents operate bank workflows.
+**Tham chiếu:** [Model Context Protocol (Anthropic)](https://modelcontextprotocol.io/), [OpenAI Function Calling docs](https://platform.openai.com/docs/guides/function-calling), [JSON Schema](https://json-schema.org/), [Ollama Tools](https://docs.ollama.com/guides/function-calling)
+**Trạng thái:** Đã xuất bản
+**Độ khó:** Trung cấp
+**Dự án:** Hệ thống Tài chính Tiêu dùng Modular — giao diện agent có kiểm soát (MCP + CLI `--json`) qua đó AI agents vận hành các workflow cho vay (KYC, quyết định tín dụng, giải ngân, loan servicing).
 
 ---
 
-## 📌 Key Takeaways (TL;DR)
+## 📌 Tóm tắt Chính (TL;DR)
 
-- An **agent interface** is not a CLI — it is a *machine-readable contract* (JSON Schema tools, structured output) that lets an LLM discover capabilities at runtime and call them safely. The CLI is just one *face* of that interface (the human/scripting face).
-- **Function calling (tool use):** the LLM outputs a structured call (`tool: name`, `arguments: {...}`) instead of prose; the app executes it and feeds the result back. The loop is: *prompt → tool decision → execution → observation → next decision*.
-- **MCP (Model Context Protocol)** standardizes how an agent *host* connects to *tool servers*: one protocol, any tool, any agent (Claude, opencode, custom). Its three primitives — **tools** (actions), **resources** (read-only data), **prompts** (templates) — map 1:1 onto a company task system.
-- **The "CLI để AI Agent thao tác" requirement should be built as: protocol (MCP) + CLI with `--json` + governed permissions.** "Agents operating freely" must be replaced by "agents operating within audited, least-privilege envelopes".
-- Safety is architectural, not afterthought: **tool allowlists, read-only roles, approval gates for consequential tools, immutable audit logs, and prompt-injection defenses** are part of the interface design itself.
+- Một **giao diện agent** không phải là CLI — nó là một *hợp đồng đọc máy được* (JSON Schema tools, đầu ra có cấu trúc) cho phép một LLM khám phá khả năng lúc runtime và gọi chúng an toàn. CLI chỉ là một *mặt* của giao diện đó (mặt người/script).
+- **Function calling (tool use):** LLM xuất một lời gọi có cấu trúc (`tool: name`, `arguments: {...}`) thay vì văn xuôi; app thực thi nó và trả kết quả lại. Vòng lặp là: *prompt → quyết định tool → thực thi → quan sát → quyết định tiếp theo*.
+- **MCP (Model Context Protocol)** tiêu chuẩn hoá cách một agent *host* kết nối tới *tool servers*: một giao thức, mọi tool, mọi agent (Claude, opencode, custom). Ba nguyên thuỷ của nó — **tools** (hành động), **resources** (dữ liệu chỉ đọc), **prompts** (bản mẫu) — ánh xạ 1:1 lên một hệ thống tác vụ công ty.
+- **Yêu cầu "CLI để AI Agent thao tác" nên được xây thành: giao thức (MCP) + CLI với `--json` + quyền hạn có kiểm soát.** "Agents vận hành tự do" phải được thay bằng "agents vận hành trong các phong bì quyền-tối-thiểu, được kiểm toán".
+- An toàn là một phần của kiến trúc, không phải nghĩ thêm: **tool allowlists, role chỉ đọc, cổng phê duyệt cho tool có hậu quả, log kiểm toán bất biến và phòng thủ prompt-injection** là một phần của chính thiết kế giao diện.
 
 ---
 
-## 🧠 Detailed Notes
+## 🧠 Ghi chú Chi tiết
 
-### 1. Core Concepts
+### 1. Khái niệm Lõi
 
-**Function calling (tool use)** — the mechanism by which an LLM *invokes your system*:
-1. You declare available tools as JSON Schemas (name + description + parameter schema).
-2. The model sees tool descriptions in context; if appropriate, it replies with a *structured* `tool_calls` payload — **not text** — containing the arguments.
-3. Your app validates the arguments, executes the real function, sends the result back to the model.
-4. The model continues (calls more tools or produces the final answer).
+**Function calling (tool use)** — cơ chế mà một LLM *gọi hệ thống của bạn*:
+1. Bạn khai báo các tool khả dụng dưới dạng JSON Schemas (name + description + parameter schema).
+2. Mô hình thấy các mô tả tool trong context; nếu thích hợp, nó trả lời bằng một payload `tool_calls` *có cấu trúc* — **không phải văn bản** — chứa các đối số.
+3. App của bạn xác thực các đối số, thực thi hàm thật, gửi kết quả lại cho mô hình.
+4. Mô hình tiếp tục (gọi thêm tool hoặc tạo câu trả lời cuối).
 
-Key insight: **the tool schema is the API contract with an LLM.** The quality of `description` and `parameters` determines whether the model calls tools correctly. Bad schema ⇒ model invents arguments or refuses tool use.
+Insight chính: **tool schema là API contract với một LLM.** Chất lượng `description` và `parameters` quyết định mô hình có gọi tool đúng hay không. Schema tồi ⇒ mô hình bịa đối số hoặc từ chối dùng tool.
 
-**Structured outputs** — forcing the model's *final* answer to also be JSON (validated against a schema), so downstream systems can consume results without parsing prose. Essential when an LLM output feeds another task in your pipeline.
+**Structured outputs** — buộc câu trả lời *cuối* của mô hình cũng là JSON (được xác thực theo schema), để hệ thống hạ nguồn tiêu thụ kết quả mà không cần parse văn xuôi. Thiết yếu khi đầu ra LLM nuôi một tác vụ khác trong pipeline của bạn.
 
-**Model Context Protocol (MCP)** — an open standard (Anthropic, Nov 2024) for connecting agents to tools/data. Architecture:
+**Model Context Protocol (MCP)** — một chuẩn mở (Anthropic, 11/2024) để kết nối agents với tools/dữ liệu. Kiến trúc:
 
 ```
 ┌──────────────┐    MCP    ┌──────────────────┐
 │   MCP Host   │ ◀───────▶ │   MCP Server(s)  │
-│  (agent app: │  JSON-RPC │  (your tools/    │
-│   Claude,    │  stdio /  │   data sources)  │
-│   opencode…) │  HTTP/SSE │                  │
+│  (agent app: │  JSON-RPC │  (tools/nguồn    │
+│   Claude,    │  stdio /  │   dữ liệu của    │
+│   opencode…) │  HTTP/SSE │   bạn)           │
 └──────────────┘           └──────────────────┘
-   │ (multiple clients)
+   │ (nhiều clients)
    ▼
- MCP Client(s)  ── connect to n servers, each exposing:
-        • tools      → actions (e.g., approve_invoice)
-        • resources  → read-only data (e.g., ledger:current)
-        • prompts    → reusable templates (e.g., "audit a task chain")
+ MCP Client(s)  ── kết nối tới n servers, mỗi server phơi bày:
+        • tools      → hành động (ví dụ: approve_loan_application)
+        • resources  → dữ liệu chỉ đọc (ví dụ: ledger:current)
+        • prompts    → bản mẫu dùng lại (ví dụ: "audit một chuỗi tác vụ")
 ```
 
-**Three MCP primitives vs your system:**
+**Ba nguyên thuỷ MCP vs hệ thống của bạn:**
 
-| MCP primitive | Meaning | Company Task System example |
-|---------------|---------|------------------------------|
-| **Tool** | callable action (mutating or not) | `approve_invoice(id)`, `post_to_ledger(id)`, `generate_report(period)` |
-| **Resource** | read-only data with a URI | `ledger://current`, `invoice://{id}/status`, `agent://session/{id}/log` |
-| **Prompt** | reusable instruction template | `audit_chain`, `draft_response_to_customer` |
+| Nguyên thuỷ MCP | Nghĩa | Ví dụ System Tài chính Tiêu dùng |
+|------------------|-------|-----------------------------------|
+| **Tool** | hành động gọi được (biến đổi hay không) | `approve_loan_application(id)`, `disburse_loan(id)`, `get_loan_status(id)`, `generate_report(period)` |
+| **Resource** | dữ liệu chỉ đọc với một URI | `loan://{id}/status`, `kyc://{id}/documents`, `ledger://loans/current`, `agent://session/{id}/log` |
+| **Prompt** | bản mẫu chỉ dẫn dùng lại | `audit_chain`, `draft_response_to_customer` |
 
-**CLI + `--json`** — your system's human/scripting face: `taskcli invoice approve --id INV-42 --json`. The CLI is a *thin client over the same contract* that MCP serves. Same engine, three consumers (human, script, agent).
+**CLI + `--json`** — mặt người/script của hệ thống bạn: `taskcli loan decision --id APP-42 --verdict approve --json`. CLI là một *client mỏng trên cùng hợp đồng* mà MCP phục vụ. Cùng một engine, ba người tiêu dùng (người, script, agent).
 
-### 2. How It Works (Mechanism)
+### 2. Nó Hoạt động Thế nào (Cơ chế)
 
-**The tool-call loop (simplified):**
+**Vòng lặp tool-call (đơn giản hoá):**
 
 ```
-User: "Approve invoice 42 and post it to the ledger, then tell me the balance."
+User: "Duyệt application 42 sau kiểm tra KYC, rồi kích hoạt giải ngân, và cho tôi biết trạng thái."
   │
   ▼
-[Agent] ──tools: [approve_invoice, post_to_ledger, get_balance]──▶ [LLM]
-  │                                                            │
-  └──────────────────  tool_calls: ◀───────────────────────────┘
-      [{name: approve_invoice, args: {invoice_id: "42"}}]       (structured!)
-      ├─▶ [Your system: validate → execute → result "ok, approved"]
+[Agent] ──tools: [approve_loan_application, disburse_loan, get_loan_status]──▶ [LLM]
+  │                                                                        │
+  └──────────────  tool_calls: ◀───────────────────────────────────────────┘
+      [{name: approve_loan_application, args: {application_id: "42"}}]     (có cấu trúc!)
+      ├─▶ [Hệ thống của bạn: xác thực → thực thi → kết quả "ok, approved"]
       │
-      ▼  (result fed back, loop repeats)
-      └── tool_calls: [{name: post_to_ledger, args: {...}}]  … etc.
+      ▼  (kết quả được trả lại, vòng lặp lặp lại)
+      └── tool_calls: [{name: disburse_loan, args: {...}}]  … v.v.
 ```
 
-**MCP request flow (stdio transport):**
+**Luồng yêu cầu MCP (transport stdio):**
 
-1. **Initialize:** client ↔ server handshake, version negotiation, capability negotiation.
-2. **List tools:** client asks `tools/list` → server returns JSON Schema of every tool.
-3. **Call:** client sends `tools/call` with tool name + arguments → server executes → returns structured result or error.
-4. **Notifications/resources:** server can push `resources/list_changed`; client fetches resources via `resources/read`.
+1. **Initialize:** bắt tay client ↔ server, đàm phán version, đàm phán khả năng.
+2. **List tools:** client hỏi `tools/list` → server trả JSON Schema của mọi tool.
+3. **Call:** client gửi `tools/call` kèm tên tool + đối số → server thực thi → trả kết quả có cấu trúc hoặc lỗi.
+4. **Notifications/resources:** server có thể đẩy `resources/list_changed`; client lấy resources qua `resources/read`.
 
-**Why MCP beats per-vendor glue:** instead of writing N adapters (OpenAI SDK, Anthropic SDK, local models, home-grown agent frameworks), you write **one MCP server** per capability set and any MCP-capable host can drive it. This is the standardization layer the agent-economy was missing.
+**Vì sao MCP đánh bại keo dán theo-nhà-cung-cấp:** thay vì viết N adapter (OpenAI SDK, Anthropic SDK, mô hình cục bộ, khung agent tự chế), bạn viết **một MCP server** cho mỗi bộ khả năng và mọi host MCP-capable đều điều khiển được nó. Đây là lớp tiêu chuẩn hoá mà nền kinh tế-agent đang thiếu.
 
-### 3. Implementation (Pseudocode)
+### 3. Triển khai (Pseudocode)
 
-**A tool definition as JSON Schema (this IS the agent contract):**
+**Một định nghĩa tool dưới dạng JSON Schema (đây CHÍNH LÀ hợp đồng agent):**
 
 ```json
 {
-  "name": "approve_invoice",
-  "description": "Approve an invoice for payment. Requires the invoice to be in 'validated' state and the caller to hold role 'approver'. Consequential action - requires explicit consent when run by an autonomous agent.",
+  "name": "approve_loan_application",
+  "description": "Approve a loan application for disbursement. Requires the application to be in 'decision_pending' state and the caller to hold role 'credit_decider'. Consequential action - requires explicit consent when run by an autonomous agent.",
   "input_schema": {
     "type": "object",
     "properties": {
-      "invoice_id": {"type": "string", "pattern": "^INV-[0-9]+$"},
+      "application_id": {"type": "string", "pattern": "^APP-[0-9]+$"},
       "reason": {"type": "string", "minLength": 10}
     },
-    "required": ["invoice_id", "reason"],
+    "required": ["application_id", "reason"],
     "additionalProperties": false
   }
 }
 ```
 
-**A minimal MCP server (FastMCP-style pseudocode):**
+**Một MCP server tối thiểu (pseudocode kiểu FastMCP):**
 
 ```python
-from mcp.server.fastmcp import FastMCP   # conceptual; SDK equivalent
+from mcp.server.fastmcp import FastMCP   # khái niệm; SDK tương đương
 
-mcp = FastMCP("company-tasks")
+mcp = FastMCP("consumer-finance")
 
 @mcp.tool()
-def approve_invoice(invoice_id: str, reason: str) -> str:
-    """Approve an invoice for payment (role-checked, audit-logged)."""
-    if not current_agent_has_role("approver"):
-        return {"error": "FORBIDDEN", "audit_id": audit.begin(invoice_id, "denied")}
-    result = saga_coordinator.advance("invoice.approved", invoice_id, by=current_agent())
-    audit.log("approve_invoice", invoice_id, by=current_agent(), result=result)
+def approve_loan_application(application_id: str, reason: str) -> str:
+    """Approve a loan application for disbursement (role-checked, audit-logged)."""
+    if not current_agent_has_role("credit_decider"):
+        return {"error": "FORBIDDEN", "audit_id": audit.begin(application_id, "denied")}
+    result = saga_coordinator.advance("credit.decision.approved", application_id, by=current_agent())
+    audit.log("approve_loan_application", application_id, by=current_agent(), result=result)
     return result
 
-@mcp.resource("ledger://current")
-def current_balance() -> dict:
-    """Read-only snapshot of the ledger (never mutates)."""
-    return ledger.snapshot()
+@mcp.resource("loan://{id}/status")
+def loan_status(id: str) -> dict:
+    """Read-only snapshot of a loan's lifecycle (never mutates)."""
+    return loan_servicing.snapshot(id)
 
-# Transport: stdio (local) or streamable HTTP — same server, either way.
+# Transport: stdio (local) hoặc streamable HTTP — cùng server, tuỳ cách.
 ```
 
-**The governed agent-loop wrapper (safety as architecture):**
+**Lớp bọc vòng lặp agent có kiểm soát (an toàn như kiến trúc):**
 
 ```python
 async def run_with_guardrails(goal: str, allowed_tools: set[str], require_human: set[str]):
     for step in agent_loop(goal, tools=allowed_tools):        # 1. tool allowlist
-        if step.tool in require_human:                        # 2. approval gates
-            await human_approve(step)                          #    (consequential tools)
-        if not audit.within_budget(step):                     # 3. cost/latency budget
+        if step.tool in require_human:                        # 2. cổng phê duyệt
+            await human_approve(step)                          #    (tools có hậu quả)
+        if not audit.within_budget(step):                     # 3. ngân sách chi phí/độ trễ
             abort("budget exceeded")
-        outcome = await execute(step)                          # 4. execute
-        await audit.record(step, outcome)                      # 5. immutable trail
+        outcome = await execute(step)                          # 4. thực thi
+        await audit.record(step, outcome)                      # 5. vết bất biến
 ```
 
-**The CLI face over the same contract:**
+**Mặt CLI trên cùng hợp đồng:**
 
 ```bash
-$ taskcli invoice approve --id INV-42 --reason "PO confirmed" --json
-{"ok": true, "state": "approved", "next": ["ledger.post.requested"], "audit_id": "a-9f3"}
+$ taskcli loan decision --id APP-42 --verdict approve --reason "Bureau check passed, DTI within limit" --json
+{"ok": true, "state": "decision_made", "next": ["contract.generation.requested"], "audit_id": "a-9f3"}
 ```
 
-Same engine. The agent hits it through MCP; the human hits it through the CLI; a script hits it through `--json`.
+Cùng engine. Agent chạm nó qua MCP; người chạm nó qua CLI; script chạm nó qua `--json`.
 
-### 4. Practical Application — for the Company Task System
+### 4. Ứng dụng Thực tế — cho Company Task System
 
-**Turning "CLI để AI Agent thao tác tự do" into a safe design:**
+**Biến "CLI để AI Agent thao tác tự do" thành một thiết kế an toàn:**
 
-1. **Every capability gets a tool schema** (MCP) — capabilities are *discoverable*, which is what makes "free operation" *capable*, not just legal.
-2. **Roles map to tool sets:** `read_only_agent` → resources only; `operator_agent` → non-consequential tools; `approver_agent` → + approval tools requiring human consent. Least privilege, like the DB roles you already know.
-3. **Consequential tools call the human gate:** invoice approval, payments, deletions → never executed by autonomous agents without a human ok (configurable per policy).
-4. **Everything is audited:** every tool call stored with agent identity, arguments, result, timestamp → the audit trail *is* the evidence an operations desk and regulators need.
-5. **Prompt-injection defense:** separate untrusted content (documents, emails being *processed*) from instructions: never let document text become system instructions; load documents as *resources/data*, keep instructions in the system prompt; allowlist tools per task; prefer structured extraction over free-form Q&A on untrusted content.
+1. **Mọi khả năng có một tool schema** (MCP) — khả năng trở nên *khám phá được*, điều làm cho "vận hành tự do" trở nên *có năng lực*, không chỉ hợp lệ.
+2. **Roles ánh xạ sang bộ tool:** `read_only_agent` → chỉ resources; `operator_agent` → tools không có hậu quả; `approver_agent` → + tools phê duyệt yêu cầu đồng thuận người. Quyền tối thiểu, như các role DB bạn đã biết.
+3. **Các tool có hậu quả gọi cổng con người:** phê duyệt tín dụng, giải ngân, xoá → không bao giờ được agent tự trị thực thi nếu không có sự đồng ý của người (cấu hình theo chính sách).
+4. **Mọi thứ đều được kiểm toán:** mỗi lời gọi tool được lưu với định danh agent, đối số, kết quả, timestamp → hành trình kiểm toán *chính là* bằng chứng bàn trực nghiệp vụ và cơ quan quản lý cần.
+5. **Phòng thủ prompt-injection:** tách nội dung không tin cậy (tài liệu, email đang *được xử lý*) khỏi chỉ thị: không bao giờ để văn bản tài liệu trở thành chỉ thị hệ thống; nạp tài liệu như *resources/dữ liệu*, giữ chỉ thị trong system prompt; allowlist tools theo tác vụ; ưu tiên trích xuất có cấu trúc hơn Q&A tự do trên nội dung không tin cậy.
 
-**The interface stack (the corrected structure from the parent idea):**
+**Ngăn xếp giao diện (kết cấu đã sửa từ ý tưởng gốc):**
 
 ```
 Core engine (bounded contexts, events, saga)
-        │  contract layer: JSON Schema tools + MCP server + REST + CLI --json
-        ├─── CLI        (human power-user, scripts)
-        ├─── Web UI     (business users — thin client, not part of this note)
+        │  lớp hợp đồng: JSON Schema tools + MCP server + REST + CLI --json
+        ├─── CLI        (power-user người, scripts)
+        ├─── Web UI     (người dùng nghiệp vụ — client mỏng, không nằm trong ghi chú này)
         └─── MCP server (agents: Claude, opencode, custom…)
 ```
 
-### 5. Comparison Table
+### 5. Bảng So sánh
 
-| Dimension | Function Calling (raw SDK) | MCP | Plain REST/OpenAPI | CLI without --json |
-|-----------|----------------------------|-----|--------------------|--------------------|
-| Agent discoverability | ✅ (schemas in prompt) | ✅ (`tools/list`) | ⚠️ (needs agent framework) | ❌ |
-| Multi-agent reuse | ❌ per-vendor glue | ✅ one server, any host | ⚠️ OpenAPI tooling exists | ❌ |
-| Structured output control | ✅ | ✅ | ✅ | ❌ (prose) |
-| Resource/data access for agents | ❌ (custom) | ✅ native resources | ✅ but bespoke | ❌ |
-| Human usability | ❌ | ❌ (dev-facing) | ⚠️ via Swagger UI | ✅ |
-| Complexity | Low | Medium | Medium | Low |
-| **Fit for your idea** | Starter 🔧 | **Core contract** ✅ | Companion (reg REST clients) | Face of the CLI ✅ |
+| Chiều | Function Calling (raw SDK) | MCP | Plain REST/OpenAPI | CLI không có --json |
+|--------|----------------------------|-----|--------------------|----------------------|
+| Khả năng khám phá agent | ✅ (schemas trong prompt) | ✅ (`tools/list`) | ⚠️ (cần agent framework) | ❌ |
+| Tái dùng đa agent | ❌ keo dán theo-vendor | ✅ một server, mọi host | ⚠️ OpenAPI tooling tồn tại | ❌ |
+| Kiểm soát đầu ra có cấu trúc | ✅ | ✅ | ✅ | ❌ (văn xuôi) |
+| Truy cập resource/dữ liệu cho agent | ❌ (tuỳ chỉnh) | ✅ resources bản địa | ✅ nhưng bespoke | ❌ |
+| Khả dụng với người | ❌ | ❌ (hướng dev) | ⚠️ qua Swagger UI | ✅ |
+| Độ phức tạp | Thấp | Trung bình | Trung bình | Thấp |
+| **Khớp với ý tưởng của bạn** | Starter 🔧 | **Hợp đồng lõi** ✅ | Đồng hành (REST client reg) | Mặt của CLI ✅ |
 
-Winner for the company system: **MCP as the contract + CLI with `--json` as the face** — because you need agent discoverability AND human usability AND auditability from the same engine.
-
----
-
-## 📝 Research Journey
-
-- **Why:** The parent idea's boldest sentence is "hệ thống CLI để thao tác tự do bằng AI Agent" — I needed to know whether that's a real engineering pattern or a buzzword. Answer: it's real, but the *contract* (not the CLI) is the technical core.
-- **Struggle:** I originally thought agents "used" systems the way humans do (typing in a terminal). The LLM *doesn't type* — it emits structured JSON calls. Realizing the CLI is only a *rendering* of the contract for humans changed my whole design.
-- **Aha moments:** (1) **Tool schema = prompt engineering**: the description field IS the model's documentation — the same care you give `README.md` must go into `description`. (2) MCP's three primitives map 1:1 to a business system (tools/resources/prompts = actions/data/templates). (3) **Prompt injection is the #1 agent-system risk**, and it's an *interface-design* problem: content must never become instructions.
-- **Career link:** Every serious company building on AI will need agent-operable systems with governance. Being one of the engineers who can *design the interface layer* (MCP + tools + audit) is a direct, differentiated skill for the AI Engineer role in Economics/Business — not just "calling an API".
-
-## 🔗 Related Topics
-
-- [01-project-idea-and-evaluation.md](01-project-idea-and-evaluation.md) — the project idea (Insight 6: CLI is a face; the protocol is the contract; governance).
-- [02-event-driven-architecture-and-task-orchestration.md](02-event-driven-architecture-and-task-orchestration.md) — the engine behind the tools (saga, events, audit) that agents drive.
-- [03-modular-monolith-vs-microservices.md](03-modular-monolith-vs-microservices.md) — the bounded contexts that define which tools exist and who may call them.
-- *(external, Researching Diary)* `ai_ml/05-mlops-lifecycle-and-deployment-architecture.md` — eval gates and monitoring for the *model* side of the loop (drift, errors).
-- *(external, Researching Diary)* `random_ideas/04-custom-tui-project.md` — the TUI/CLI project for AGY & opencode — the human-interaction side of this same interface story.
-- [SUGGESTED] **"Agentic safety & prompt-injection defense in depth"** — an entire security layer (content/instruction separation, tool allowlists, sandboxing, red-teaming) that mainstream notes skip. *Why important:* this is the difference between a demo and a system a bank can trust with money — regulatory-grade audit matters.
-- [SUGGESTED] **"Evaluating agent workflows (eval harness for tool-using LLMs)"** — how to measure whether your agent actually completes task chains correctly (pass@k over real task traces). *Why important:* the MLOps eval mindset applied to agents before touching real bank data.
-
-## 🤔 Open Questions
-
-- [ ] MCP stdio vs streamable HTTP transport for a multi-agent corporate deployment — security implications?
-- [ ] How should the tool schema describe *business constraints* (roles, states) so the model rarely attempts forbidden calls?
-- [ ] What audit format satisfies both an operations desk and a potential regulator (immutable log, hash-chained)?
-- [ ] How to evaluate agent task-completion quality BEFORE letting it touch real data (eval harness, shadow mode)?
+Người thắng cho hệ thống công ty: **MCP làm hợp đồng + CLI với `--json` làm mặt** — vì bạn cần cả khả năng khám phá agent LẪN khả năng dùng của người LẪN khả năng kiểm toán từ cùng một engine.
 
 ---
-*The CLI is the human face of a contract; the schema is the agent's face. Design the contract once, wear it both ways.*
+
+## 📝 Hành trình Nghiên cứu
+
+- **Tại sao:** Câu nói táo bạo nhất của ý tưởng gốc là "hệ thống CLI để thao tác tự do bằng AI Agent" — tôi cần biết liệu đó có phải một mẫu kỹ thuật thật hay chỉ là buzzword. Đáp án: nó thật, nhưng *hợp đồng* (không phải CLI) mới là lõi kỹ thuật.
+- **Vật lộn:** Ban đầu tôi nghĩ agents "dùng" hệ thống như con người (gõ trong terminal). LLM *không gõ* — nó phát ra các lời gọi JSON có cấu trúc. Nhận ra CLI chỉ là một *biểu diễn* của hợp đồng cho con người đã thay đổi toàn bộ thiết kế của tôi.
+- **Khoảnh khắc à-ha:** (1) **Tool schema = prompt engineering**: field `description` CHÍNH LÀ tài liệu của mô hình — sự chăm chút bạn dành cho `README.md` phải vào trong `description`. (2) Ba nguyên thuỷ của MCP ánh xạ 1:1 tới một hệ thống nghiệp vụ (tools/resources/prompts = hành động/dữ liệu/bản mẫu). (3) **Prompt injection là rủi ro #1 của hệ thống agent**, và nó là vấn đề *thiết kế giao diện*: nội dung không bao giờ được trở thành chỉ thị.
+- **Liên kết sự nghiệp:** Mọi công ty nghiêm túc xây trên AI sẽ cần hệ thống agent-operable với quản trị. Là một trong các kỹ sư *thiết kế được lớp giao diện* (MCP + tools + audit) là một kỹ năng trực tiếp, tạo khác biệt cho vai AI Engineer trong Kinh tế/Kinh doanh — không chỉ "gọi một API".
+
+## 🔗 Chủ đề Liên quan
+
+- [01-project-idea-and-evaluation.md](01-project-idea-and-evaluation.md) — ý tưởng dự án (Insight 6: CLI là một mặt; giao thức là hợp đồng; quản trị).
+- [02-event-driven-architecture-and-task-orchestration.md](02-event-driven-architecture-and-task-orchestration.md) — engine đằng sau các tools (saga, events, audit) mà agents điều khiển.
+- [03-modular-monolith-vs-microservices.md](03-modular-monolith-vs-microservices.md) — các bounded contexts định nghĩa tool nào tồn tại và ai được gọi chúng.
+- *(bên ngoài, Nhật ký Nghiên cứu)* `ai_ml/05-mlops-lifecycle-and-deployment-architecture.md` — cổng eval và giám sát cho phía *mô hình* của vòng lặp (trôi dạt, lỗi).
+- *(bên ngoài, Nhật ký Nghiên cứu)* `random_ideas/04-custom-tui-project.md` — dự án TUI/CLI cho AGY & opencode — phía tương tác-con-người của cùng câu chuyện giao diện này.
+- [ĐỀ XUẤT] **"An toàn agentic & phòng thủ prompt-injection theo chiều sâu"** — một lớp bảo mật trọn vẹn (tách nội dung/chỉ thị, allowlist tools, sandboxing, red-teaming) mà các ghi chú chính thống bỏ qua. *Tại sao quan trọng:* đây là khác biệt giữa một demo và một hệ thống một bên cho vay tin tưởng giao tiền — kiểm toán đạt chuẩn quy định mới đáng tin.
+- [ĐỀ XUẤT] **"Đánh giá workflow agent (eval harness cho LLM dùng tool)"** — cách đo liệu agent của bạn có thực sự hoàn tất chuỗi tác vụ đúng không (pass@k trên trace tác vụ thật). *Tại sao quan trọng:* tư duy eval của MLOps áp cho agent trước khi chạm dữ liệu cho vay thật.
+
+## 🤔 Câu hỏi Mở
+
+- [ ] MCP stdio vs streamable HTTP transport cho triển khai doanh nghiệp đa-agent — hàm ý bảo mật?
+- [ ] Tool schema nên mô tả *ràng buộc nghiệp vụ* (roles, states) thế nào để mô hình hiếm khi thử gọi bị cấm?
+- [ ] Định dạng audit nào thoả mãn cả bàn trực nghiệp vụ lẫn cơ quan quản lý tiềm năng (log bất biến, hash-chained)?
+- [ ] Cách đánh giá chất lượng hoàn-thành-tác-vụ của agent TRƯỚC khi nó chạm dữ liệu thật (eval harness, shadow mode)?
+
+---
+*CLI là mặt người của một hợp đồng; schema là mặt của agent. Thiết kế hợp đồng một lần, đeo nó cả hai chiều.*

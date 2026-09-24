@@ -1,242 +1,249 @@
-# Event-Driven Architecture & Task Orchestration
+# Kiến trúc Hướng Sự kiện & Điều phối Tác vụ
 
-**Created Date:** 2026-09-23
-**Last Updated:** 2026-09-23
+**Ngày tạo:** 2026-09-23
+**Cập nhật lần cuối:** 2026-09-23
 **Tags:** `#EventDrivenArchitecture`, `#MessageBroker`, `#Saga`, `#TaskOrchestration`, `#SystemDesign`, `#Backend`
-**References:** [Saga pattern — Microservices.io](https://microservices.io/patterns/data/saga.html), [Kafka design docs](https://kafka.apache.org/documentation/), [Event-driven architecture — AWS](https://aws.amazon.com/event-driven-architecture/)
-**Status:** Published
-**Difficulty:** Intermediate
-**Project:** Modular Bank Operations System — the "solid back-end" design for bank task chains (payments → AML approval → ledger → reporting).
+**Tham chiếu:** [Saga pattern — Microservices.io](https://microservices.io/patterns/data/saga.html), [Kafka design docs](https://kafka.apache.org/documentation/), [Event-driven architecture — AWS](https://aws.amazon.com/event-driven-architecture/)
+**Trạng thái:** Đã xuất bản
+**Độ khó:** Trung cấp
+**Dự án:** Hệ thống Tài chính Tiêu dùng Modular — thiết kế "back-end vững chắc" cho các chuỗi tác vụ cho vay (origination → KYC → quyết định tín dụng → hợp đồng → giải ngân → servicing/trả nợ → sổ sách → báo cáo).
 
 ---
 
-## 📌 Key Takeaways (TL;DR)
+## 📌 Tóm tắt Chính (TL;DR)
 
-- **Events are facts of the past; commands are requests for the future.** "Task B must react to what Task A did" ⇒ emit an event; "Task A please do X" ⇒ send a command. Mixing them is the #1 source of coupled systems.
-- A **message broker** (Kafka/RabbitMQ/Redis Streams) is the "solid back-end" of the Modular Company Task System: it gives durability, retries, and auditability — but it only *delivers*, it never guarantees your consumers are correct.
-- Three guarantees make a linked system actually solid: **at-least-once delivery + idempotent consumers + dead-letter queues**. Ordering is a bonus that costs throughput — buy it only where the domain needs it.
-- Tasks that span components must be wrapped in a **saga** (distributed workflow with compensation). Start with **orchestration** (a central coordinator) for business clarity; use choreography only when teams are mature and workflows are stable.
-- **Every schema change is a contract change.** A schema registry + SemVer + deprecation windows is what keeps an event-driven system *evolvable* — which is exactly the "easy to modify long-term" requirement of the parent idea.
+- **Events là sự thật của quá khứ; commands là yêu cầu cho tương lai.** "Task B phải phản ứng với điều Task A đã làm" ⇒ phát một event; "Task A làm X giúp tôi" ⇒ gửi một command. Trộn lẫn chúng là nguồn #1 của hệ thống bị khớp nối.
+- Một **message broker** (Kafka/RabbitMQ/Redis Streams) là "back-end vững chắc" của Hệ thống Tác vụ Modular cho Công ty: nó cho độ bền, retries và khả năng kiểm toán — nhưng nó chỉ *giao hàng*, không bao giờ đảm bảo consumer của bạn đúng.
+- Ba đảm bảo làm hệ thống liên kết thực sự vững chắc: **phân phối at-least-once + consumer idempotent + dead-letter queues**. Thứ tự là một phần thưởng tốn throughput — chỉ mua nó nơi lĩnh vực cần.
+- Các tác vụ trải dài nhiều thành phần phải được bọc trong một **saga** (workflow phân tán có bù trừ). Bắt đầu bằng **orchestration** (một bộ điều phối trung tâm) để rõ nghiệp vụ; chỉ dùng choreography khi đội ngũ chín chắn và workflow ổn định.
+- **Mọi thay đổi schema là một thay đổi hợp đồng.** Schema registry + SemVer + cửa sổ deprecation là thứ giữ hệ thống hướng sự kiện *tiến hoá được* — chính là yêu cầu "dễ sửa đổi lâu dài" của ý tưởng gốc.
 
 ---
 
-## 🧠 Detailed Notes
+## 🧠 Ghi chú Chi tiết
 
-### 1. Core Concepts
+### 1. Khái niệm Lõi
 
-**Event vs Command — the fundamental distinction.**
+**Event vs Command — sự phân biệt nền tảng.**
 
 | | Event | Command |
-|---|-------|---------|
-| Semantics | *Something happened* (past tense, fact) | *Do this* (request, future intent) |
-| Producer expects | No reply (fire-and-forget) | A result / acknowledgement |
-| Language | `InvoiceApproved`, `PaymentCaptured` | `ApproveInvoice`, `CapturePayment` |
-| Failure | Already happened — can't fail | Can be rejected/retried |
-| Broker role | Distributor (notify subscribers) | Router (deliver to *one* worker) |
+|--|-------|---------|
+| Ngữ nghĩa | *Một điều gì đó đã xảy ra* (thì quá khứ, sự thật) | *Hãy làm điều này* (yêu cầu, ý định tương lai) |
+| Nhà sản xuất kỳ vọng | Không có trả lời (fire-and-forget) | Một kết quả / lời xác nhận |
+| Ngôn ngữ | `InvoiceApproved`, `PaymentCaptured` | `ApproveInvoice`, `CapturePayment` |
+| Thất bại | Đã xảy ra — không thể thất bại | Có thể bị từ chối/retry |
+| Vai trò broker | Nhà phân phối (thông báo subscriber) | Bộ định tuyến (giao cho *một* worker) |
 
-**Why this matters for your idea:** "Các tác vụ liên kết với nhau" (tasks link to each other) is almost always an *event* relationship — Task A completes, therefore Task B starts. If you model that linkage as synchronous command chains (`A → call B → call C`), you build a distributed monolith: one slow/failed task blocks the whole chain. Events give you **temporal decoupling** (B does not wait for A) and **spatial decoupling** (B does not need to know A's address).
+**Vì sao điều này quan trọng cho ý tưởng của bạn:** "Các tác vụ liên kết với nhau" gần như luôn là mối quan hệ *event* — Task A hoàn tất, vậy nên Task B bắt đầu. Nếu bạn mô hình hoá sự liên kết đó thành chuỗi command đồng bộ (`A → gọi B → gọi C`), bạn xây một monolith phân tán: một tác vụ chậm/thất bại chặn toàn chuỗi. Events cho bạn **tách rời thời gian** (temporal decoupling — B không đợi A) và **tách rời không gian** (spatial decoupling — B không cần biết địa chỉ của A).
 
-**Message broker** — the durable middleman:
-- **Kafka** — append-only log, partitioned topics, replayable, huge throughput; great for event streams + audit.
-- **RabbitMQ** — classic queue + AMQP exchanges, routing, per-message acknowledgements; great for commands/work queues.
-- **Redis Streams** — lightweight, in-memory-ish, good for small/medium systems with low ops overhead.
+**Message broker** — người trung gian bền vững:
+- **Kafka** — log append-only, topic phân vùng, replay được, throughput khổng lồ; tuyệt cho event streams + audit.
+- **RabbitMQ** — queue kinh điển + AMQP exchanges, routing, xác nhận từng message; tuyệt cho commands/work queues.
+- **Redis Streams** — nhẹ, gần-in-memory, tốt cho hệ thống nhỏ/vừa với chi phí vận hành thấp.
 
-**Pub/Sub** — publishers don't know subscribers (each subscriber gets its own copy of the event) vs **queue** — one consumer takes each message.
+**Pub/Sub** — publisher không biết subscriber (mỗi subscriber nhận một bản sao riêng của event) vs **queue** — một consumer nhận mỗi message.
 
-**Event Sourcing** — store the *sequence of events* as the source of truth, derive current state by replaying (projection). Powerful auditability; higher complexity. Optional for v1 — only add when you need the event log as truth (finance/audit-heavy domains).
+**Event Sourcing** — lưu *chuỗi sự kiện* làm nguồn sự thật, suy ra trạng thái hiện tại bằng cách replay (projection). Khả năng kiểm toán mạnh; độ phức tạp cao hơn. Tuỳ chọn cho v1 — chỉ thêm khi bạn cần event log làm chân lý (lĩnh vực tài chính/nặng kiểm toán).
 
-**CQRS (Command Query Responsibility Segregation)** — separate write models from read models; often pairs with event sourcing; useful for read-heavy dashboards. Optional again.
+**CQRS (Command Query Responsibility Segregation)** — tách mô hình ghi khỏi mô hình đọc; thường đi cặp event sourcing; hữu ích cho dashboard nặng đọc. Lại là tuỳ chọn.
 
-### 2. How It Works (Mechanism)
+### 2. Nó Hoạt động Thế nào (Cơ chế)
 
-A minimal reliable pipeline:
+Một pipeline đáng tin cậy tối thiểu:
 
 ```
-[Producer] --publish--> [Broker: topic "payment.captured"] --> [Consumer Group: ledger-service]
+[Producer] --publish--> [Broker: topic "repayment.received"] --> [Consumer Group: ledger-service]
                                                               │
-                                                              └─ idempotency check → process → commit offset
+                                                              └─ kiểm tra idempotency → xử lý → commit offset
 ```
 
-**Guarantee stack:** a broker gives **at-least-once** (delivery retried until acknowledged). That means your consumer may see the same event twice. Therefore: **consumers MUST be idempotent** — applying the event twice has the same effect as applying once (use a unique event/business key stored at the consumer; skip if seen).
+**Ngăn xếp đảm bảo:** broker cho **at-least-once** (giao hàng được retry cho tới khi xác nhận). Nghĩa là consumer có thể thấy cùng một event hai lần. Vì vậy: **consumer PHẢI idempotent** — áp event hai lần cùng hiệu ứng như áp một lần (dùng một key event/nghiệp vụ duy nhất lưu tại consumer; bỏ qua nếu đã thấy).
 
-**Ordering:** Kafka guarantees order *within a partition* — keyed by the entity (e.g., `invoice_id`), so all events of one invoice land in one partition, in order. Cross-entity global order is basically impossible; the domain almost never needs it.
+**Thứ tự:** Kafka đảm bảo thứ tự *trong một partition* — khai báo theo thực thể (ví dụ: `application_id`), nên mọi event của một khoản vay đổ vào một partition, đúng thứ tự. Thứ tự toàn cục xuyên thực thể về cơ bản là bất khả; lĩnh vực gần như không bao giờ cần.
 
-**Dead Letter Queue (DLQ):** after N failed attempts (poison messages), park the event in a DLQ for manual/after-hours repair instead of blocking the pipeline forever.
+**Dead Letter Queue (DLQ):** sau N lần thất bại (poison messages), park event vào một DLQ để sửa thủ công/ngoài giờ thay vì chặn pipeline mãi mãi.
 
-**Exponential backoff with jitter** (retry pacing):
+**Exponential backoff với jitter** (nhịp retry):
 
 $$t_n = \text{base} \cdot 2^n + \text{rand}(0, \text{jitter})$$
 
-Prevents the "thundering herd" where all consumers retry simultaneously after a broker hiccup.
+Ngăn "thundering herd" nơi mọi consumer cùng retry đồng loạt sau một trục trặc broker.
 
-**Schema registry & evolution:**
-- All events carry `schema_version`.
-- **Additive changes** (new optional field) = backward compatible → safe on the same version.
-- **Breaking changes** (field removed/retyped) = new major version + **dual-write window** (produce both versions for N weeks) while consumers migrate.
+**Schema registry & tiến hoá:**
+- Mọi event mang `schema_version`.
+- **Thay đổi cộng dồn** (thêm field tuỳ chọn mới) = tương thích ngược → an toàn trên cùng version.
+- **Thay đổi phá vỡ** (field bị gỡ/đổi kiểu) = major version mới + **cửa sổ dual-write** (sản xuất cả hai version trong N tuần) trong khi consumer di cư.
 
-This is the *mechanical* basis of "thích ứng với thời cuộc / dễ dàng sửa đổi" — the thing that keeps a 5-year-old system safe to evolve.
+Đây là cơ sở *cơ học* của "thích ứng với thời cuộc / dễ dàng sửa đổi" — thứ giữ một hệ thống 5 năm tuổi an toàn để tiến hoá.
 
-### 3. Task Orchestration — Choreography vs Orchestration vs Saga
+### 3. Điều phối Tác vụ — Choreography vs Orchestration vs Saga
 
-Three ways to link tasks in a workflow:
+Ba cách liên kết tác vụ trong một workflow:
 
-**A. Choreography (event-driven, no central coordinator):**
+**A. Choreography (hướng sự kiện, không có bộ điều phối trung tâm):**
 ```
-PaymentSvc → emits "payment.captured" → LedgerSvc reacts → emits "ledger.posted" → ReportSvc reacts
+LoanServicing → phát "repayment.received" → LedgerSvc phản ứng → phát "ledger.posted" → ReportSvc phản ứng
 ```
-- ✅ Max decoupling, no single point of failure, each service owns its logic.
-- ❌ The overall business flow is *implicit* — nobody can answer "what happens if payment.captured never arrives?" without reading every consumer. Debugging and business monitoring are hard.
-- ⚠️ It is a **distributed transaction without a rollback**: if Ledger fails after Payment succeeded, who fixes the inconsistency?
+- ✅ Tách rời tối đa, không có điểm lỗi đơn, mỗi service sở hữu logic của mình.
+- ❌ Toàn bộ quy trình nghiệp vụ là *ngầm định* — không ai trả lời được "chuyện gì xảy ra nếu repayment.received không bao giờ tới?" mà không đọc mọi consumer. Debug và giám sát nghiệp vụ khó.
+- ⚠️ Nó là một **giao dịch phân tán không có rollback**: nếu Ledger thất bại sau khi Payment đã thành công, ai sửa sự không nhất quán?
 
-**B. Orchestration (central workflow engine/coordinator):**
+**B. Orchestration (workflow engine/bộ điều phối trung tâm):**
 ```
-Orchestrator: 1. call PaymentSvc (command) → 2. on ok, call LedgerSvc → 3. on failure, call Compensation
+Orchestrator: 1. gọi KYCSvc (command) → 2. nếu ok, gọi CreditDecisionSvc → 3. nếu thất bại, gọi Compensation
 ```
-- ✅ Explicit business flow (easy to read, monitor, and version); recovery is a first-class state machine.
-- ❌ The orchestrator becomes a coupling point (a "god service" if overused); every step is a round-trip.
-- This matches your idea's instinct: *"các tác vụ có khả năng liên kết với nhau"* with **visibility** — a company operations desk needs to *see* where a task chain is stuck.
+- ✅ Quy trình nghiệp vụ tường minh (dễ đọc, giám sát và version); phục hồi là một state machine hạng nhất.
+- ❌ Orchestrator trở thành điểm khớp nối (một "god service" nếu lạm dụng); mỗi bước là một round-trip.
+- Điều này khớp bản năng của ý tưởng bạn: *"các tác vụ có khả năng liên kết với nhau"* với **tính nhìn thấy** — một bàn trực nghiệp vụ cần *thấy* chuỗi tác vụ đang kẹt ở đâu.
 
-**C. Saga = the correct way to do long, multi-component business flows.**
+**C. Saga = cách đúng để làm các quy trình nghiệp vụ dài, đa thành phần.**
 
-A saga is a sequence of local transactions, each with a **compensation** (undo):
+Saga là một chuỗi các giao dịch cục bộ, mỗi cái có một **bù trừ** (undo):
 
 ```
-PlaceOrder ──▶ ReserveStock ──▶ ChargePayment ──▶ ConfirmOrder
-                  │                 │
-              (fail)            (fail)
-                  ▼                 ▼
-           ReleaseStock ────▶ RefundPayment
+ApplyLoan ──▶ KYCVerify ──▶ CreditDecision ──▶ Disburse ──▶ ActivateSchedule
+                │                 │              │
+              (fail)           (fail)          (fail)
+                ▼                 ▼              ▼
+         CloseApplication   RejectCase    CancelDisbursement
 ```
 
-Saga pattern has two incarnations:
-- **Orchestrating saga** (central coordinator decides each step + compensations) — recommended start.
-- **Choreographed saga** (each service publishes events that trigger the next; compensations via events too) — for mature, decoupled teams.
+Saga có hai hoá thân:
+- **Orchestrating saga** (bộ điều phối trung tâm quyết định mỗi bước + bù trừ) — khởi đầu được khuyến nghị.
+- **Choreographed saga** (mỗi service phát events kích hoạt bước tiếp; bù trừ cũng qua events) — cho các đội chín chắn, tách rời.
 
-**Which one for the Company Task System?** Orchestrated saga. Reason: business workflows need *observability, versioning, and pause/resume* (a task chain may wait days for human approval). A central state machine gives all three for free; you can still *emit events from every step* for audit and analytics (events + orchestrator are complementary, not competing).
+**Cái nào cho Company Task System?** Orchestrated saga. Lý do: workflow nghiệp vụ cần *observability, versioning và pause/resume* (một chuỗi tác vụ có thể chờ nhiều ngày để phê duyệt con người). Một state machine trung tâm cho cả ba miễn phí; bạn vẫn có thể *phát events từ mỗi bước* để audit và analytics (events + orchestrator là bổ sung, không cạnh tranh).
 
-### 4. Implementation (Pseudocode)
+### 4. Triển khai (Pseudocode)
 
-**A minimal orchestrating saga for an invoice-processing task chain:**
+**Một orchestrating saga tối thiểu cho chuỗi vay tiền mặt online (v0):**
 
 ```python
 # saga_coordinator.py — orchestrating saga
-# Workflow: InvoiceReceived → ExtractData(AI) → Validate → Approve(human) → PostToLedger
+# Workflow: ApplicationSubmitted → KYCVerified → CreditDecision(auto/human) → ContractSigned → Disbursed → RepaymentReceived
 
-class InvoiceSagaCoordinator:
-    STATES = ("received", "extracted", "validated", "approved", "posted", "compensated")
+class CashLoanSagaCoordinator:
+    STATES = ("submitted", "kyc_verified", "decision_made", "signed", "disbursed", "repaying", "compensated")
 
     def __init__(self, bus, store):
         self.bus = bus        # event bus / broker
-        self.store = store    # saga-state store (DB with saga_id as key)
+        self.store = store    # saga-state store (DB with application_id as key)
 
-    async def start(self, invoice_id: str):
-        saga = self.store.create(invoice_id)
-        await self.bus.publish("invoice.received", {"invoice_id": invoice_id,
-                                                    "schema_version": 1})
+    async def start(self, application_id: str):
+        saga = self.store.create(application_id)
+        await self.bus.publish("application.submitted", {"application_id": application_id,
+                                                         "schema_version": 1})
 
     async def on_event(self, event: dict):
-        key = event["invoice_id"]
+        key = event["application_id"]
         saga = self.store.get(key)
         if not self._is_expected(event, saga.state):
-            return  # stale/out-of-order event → ignore (idempotency)
+            return  # event cũ/nghịch thứ tự → bỏ qua (idempotency)
 
-        if event["type"] == "invoice.extracted" and event["ok"]:
-            saga.state = "extracted"
-            await self.bus.publish("invoice.validation.requested", {"invoice_id": key})
-        elif event["type"] == "invoice.validated" and event["ok"]:
-            saga.state = "validated"
-            await self.bus.publish("invoice.approval.requested", {"invoice_id": key})  # → human/agent approval
-        elif event["type"] == "invoice.approved":
-            saga.state = "approved"
-            await self.bus.publish("ledger.post.requested", {"invoice_id": key})
-        elif event["type"] == "ledger.posted":
-            saga.state = "posted"
-            self.store.complete(key)
-        elif event["type"] in ("invoice.validation.failed", "invoice.rejected"):
-            await self._compensate(saga)  # e.g., notify billing + reopen case
+        if event["type"] == "kyc.verified" and event["ok"]:
+            saga.state = "kyc_verified"
+            await self.bus.publish("credit.decision.requested", {"application_id": key})
+        elif event["type"] == "credit.decision.approved":
+            saga.state = "decision_made"
+            await self.bus.publish("contract.generation.requested", {"application_id": key})
+        elif event["type"] == "contract.signed":
+            saga.state = "signed"
+            await self.bus.publish("disbursement.requested", {"application_id": key})
+        elif event["type"] == "disbursement.completed":
+            saga.state = "disbursed"
+            await self.bus.publish("repayment.schedule.activated", {"application_id": key})
+        elif event["type"] == "repayment.received":
+            saga.state = "repaying"
+            self.store.complete(key)   # v0: khoản trả nợ đầu tiên đóng đường chính
+        elif event["type"] in ("kyc.failed", "credit.decision.rejected", "contract.expired"):
+            await self._compensate(saga)  # ví dụ: đóng application + thông báo kênh
 
     async def _compensate(self, saga):
         saga.state = "compensated"
-        await self.bus.publish("invoice.compensated", {"invoice_id": saga.id})
-        # compensation for each already-committed step lives HERE,
-        # as a reversed sequence of compensating actions.
+        await self.bus.publish("application.compensated", {"application_id": saga.id})
+        # bù trừ cho từng bước đã commit nằm NGAY ĐÂY,
+        # như một chuỗi ngược các hành động bù trừ (nhả hold tín dụng, huỷ giải ngân).
 ```
 
-**The idempotent consumer side:**
+**Phía consumer idempotent:**
 
 ```python
-# ledger_consumer.py — consumes "ledger.post.requested"
-async def handle_post_request(event, db):
-    key = event["invoice_id"]
-    if await db.dedupe_exists(key):        # 1) idempotency guard
+# disbursement_consumer.py — tiêu thụ "disbursement.requested"
+# Di chuyển tiền là bước rủi ro nhất: tái-áp nó phải là bất khả.
+async def handle_disburse(event, db, gateway):
+    key = event["disbursement_id"]
+    if await db.dedupe_exists(key):        # 1) rào idempotency
         return
     try:
-        await db.post_ledger_entry(event)  # 2) apply exactly once
+        await gateway.payout(event)        # 2) gọi e-wallet/chuyển khoản ngân hàng đúng một lần
+        await db.post_disbursement(event)
     except RetryableError:
         await bus.retry_later(event, backoff=exponential_with_jitter(base=1_000, jitter=500))
     except PoisonError:
-        await bus.dead_letter(event)       # 3) park in DLQ, alert human
+        await bus.dead_letter(event)       # 3) park vào DLQ, cảnh báo con người — không bao giờ auto-retry mãi
     await db.mark_dedupe(key)
 ```
 
-### 5. Practical Application — to the Company Task System
+### 5. Ứng dụng Thực tế — cho Company Task System
 
-**The "solid back-end" defined operationally.** For your idea, "vững chắc" (solid) should mean these *verifiable properties*:
+**Định nghĩa "back-end vững chắc" theo vận hành.** Với ý tưởng của bạn, "vững chắc" nên có nghĩa là những *thuộc tính kiểm chứng được* này:
 
-| Property | Implementation | How you verify it |
-|----------|----------------|-------------------|
-| Durability | Broker persists events (Kafka retention/compaction) | Test: restart broker, events survive |
-| No silent loss | At-least-once + consumer offsets | Test: kill consumer mid-batch → no lost events |
-| Exactly-once *effect* | Idempotency keys + dedupe store | Test: replay same event → same state |
-| Workflow recovery | Orchestrated saga state machine | Test: crash coordinator → resume from last state |
-| No infinite blocking | DLQ + alerts | Test: poison message lands in DLQ, alert fires |
-| Evolvable contracts | Schema registry + SemVer + dual-write | Test: v2 event consumed by v1 consumers during window |
+| Thuộc tính | Triển khai | Cách bạn kiểm chứng |
+|------------|------------|---------------------|
+| Độ bền | Broker lưu trữ events (Kafka retention/compaction) | Test: khởi động lại broker, events vẫn còn |
+| Không mất mát ngầm | At-least-once + consumer offsets | Test: giết consumer giữa batch → không mất event |
+| *Hiệu ứng* exactly-once | Idempotency keys + dedupe store | Test: replay cùng event → cùng trạng thái |
+| Phục hồi workflow | Orchestrated saga state machine | Test: crash coordinator → tiếp tục từ trạng thái cuối |
+| Không chặn vô hạn | DLQ + cảnh báo | Test: poison message đáp vào DLQ, cảnh báo kích hoạt |
+| Hợp đồng tiến hoá được | Schema registry + SemVer + dual-write | Test: event v2 được consumer v1 tiêu thụ trong cửa sổ |
 
-**Example task graph from the parent idea** (Quote → Invoice → Payment → Ledger → Report) now maps naturally:
+**Ví dụ task graph cho neo đậu v0 (vay tiền mặt online)** — chuỗi theo kiểu HomeCredit:
 
 ```
-[Quote task] ──quote.accepted──▶ [Invoice task] ──invoice.approved (human gate)──▶
-[Payment task] ──payment.captured──▶ [Ledger task] ──ledger.posted──▶ [Report task]
+[KYC/Onboarding] ──kyc.verified──▶ [Application] ──credit.decision.approved (cổng auto hoặc người)──▶
+[Contracting] ──contract.signed──▶ [Disbursement] ──disbursement.completed──▶
+[Loan Servicing] ──repayment.received──▶ [Ledger] ──ledger.posted──▶ [Reporting]
 ```
 
-Each link is an **event**; every component stays independent (deploys/evolves alone); the **orchestrated saga** makes the chain's health visible to the operations desk; the **event log** doubles as the audit trail an agent-operated company needs.
+Mỗi mắt xích là một **event**; mọi thành phần vẫn độc lập (tự triển khai/tiến hoá); **orchestrated saga** làm cho sức khoẻ của chuỗi hiện rõ trên bàn trực nghiệp vụ; **event log** kiêm nhiệm nhật ký kiểm toán mà một công ty do agent vận hành cần.
 
-### 6. Comparison Table
+### 6. Bảng So sánh
 
-| Dimension | Choreography | Orchestration (saga) | Sync RPC chain |
-|-----------|--------------|----------------------|----------------|
-| Coupling | Lowest | Medium (one coordinator) | Highest |
-| Business-flow visibility | Poor (implicit) | Excellent (explicit) | Good (but single request) |
-| Failure handling | Ad-hoc compensation | Structured compensation | Timeouts/retries only |
-| Recovery / pause-resume | Manual | Native (state machine) | Manual |
-| Scale ceiling | Excellent | Good (coordinator must scale) | Poor (request depth) |
-| Best for | Stable flows, mature teams | Business-critical, multi-step, human gates | Trivial 2-hop chains |
-| **Fit for your idea** | ⚠️ After Maturity | ✅ **Recommended start** | ❌ Distributed monolith trap |
+| Chiều | Choreography | Orchestration (saga) | Chuỗi RPC đồng bộ |
+|--------|--------------|----------------------|-------------------|
+| Coupling | Thấp nhất | Trung bình (một coordinator) | Cao nhất |
+| Tính nhìn thấy quy trình | Kém (ngầm định) | Xuất sắc (tường minh) | Tốt (nhưng một request) |
+| Xử lý thất bại | Bù trừ ad-hoc | Bù trừ có cấu trúc | Chỉ timeout/retries |
+| Phục hồi / pause-resume | Thủ công | Tự nhiên (state machine) | Thủ công |
+| Trần mở rộng | Xuất sắc | Tốt (coordinator phải scale) | Kém (độ sâu request) |
+| Tốt nhất cho | Luồng ổn định, đội chín chắn | Nghiệp vụ then chốt, đa bước, cổng người | Chuỗi 2-hop tầm thường |
+| **Khớp với ý tưởng của bạn** | ⚠️ Sau khi chín chắn | ✅ **Khởi đầu khuyến nghị** | ❌ Bẫy monolith phân tán |
 
 ---
 
-## 📝 Research Journey
+## 📝 Hành trình Nghiên cứu
 
-- **Why:** The parent idea says tasks must "liên kết với nhau thông qua hệ thống back-end vững chắc" — this note exists to answer *what "vững chắc" mechanically means* and how independent components can still form coherent business flows.
-- **Struggle:** I kept conflating events and commands, and assuming that "more decoupling = better". Reality: choreography decouples the *code* but *hides the business process* — for a company system, hidden processes are unacceptable.
-- **Aha moments:** (1) Idempotency is not a nice-to-have — "at-least-once" *forces* it; (2) the orchestrated saga is not a violation of events — you can (and should) have both: orchestrator for control flow, events for audit and analytics; (3) schema evolution discipline is literally how "easy to modify long-term" becomes true in a distributed system.
-- **Career link:** Event-driven systems are the backbone of every serious fintech/logistics/business platform — the Economics/Business systems I want to engineer. Being fluent here is the difference between "integration layer" and "distributed monolith".
+- **Tại sao:** Ý tưởng gốc nói các tác vụ phải "liên kết với nhau thông qua hệ thống back-end vững chắc" — ghi chú này tồn tại để trả lời *"vững chắc" cơ học nghĩa là gì* và làm sao các thành phần độc lập vẫn tạo thành các quy trình nghiệp vụ mạch lạc.
+- **Vật lộn:** Tôi cứ trộn events và commands, và giả định "tách rời hơn = tốt hơn". Thực tế: choreography tách rời *code* nhưng *che giấu quy trình nghiệp vụ* — với một hệ thống công ty, quy trình ẩn là không thể chấp nhận.
+- **Khoảnh khắc à-ha:** (1) Idempotency không phải thứ tốt-có-thì-sao — "at-least-once" *bắt buộc* nó; (2) orchestrated saga không vi phạm events — bạn có thể (và nên) có cả hai: orchestrator cho luồng điều khiển, events cho audit và analytics; (3) kỷ luật tiến hoá schema chính là cách "dễ sửa đổi lâu dài" trở thành sự thật trong một hệ thống phân tán.
+- **Liên kết sự nghiệp:** Hệ thống hướng sự kiện là backbone của mọi nền tảng fintech/logistics/nghiệp vụ nghiêm túc — hệ thống Kinh tế/Kinh doanh tôi muốn kỹ sư hoá. Thông thạo ở đây là khác biệt giữa "lớp tích hợp" và "monolith phân tán".
 
-## 🔗 Related Topics
+## 🔗 Chủ đề Liên quan
 
-- [01-project-idea-and-evaluation.md](01-project-idea-and-evaluation.md) — the project idea this note implements (Insight 2: the "solid back-end" *is* the idea).
-- [03-modular-monolith-vs-microservices.md](03-modular-monolith-vs-microservices.md) — how to keep the components independent *while* they exchange events (contract + boundary discipline).
-- [04-mcp-and-function-calling-agent-interfaces.md](04-mcp-and-function-calling-agent-interfaces.md) — how agents consume these task capabilities (protocol layer above the same backend).
-- *(external, Researching Diary)* `ai_ml/05-mlops-lifecycle-and-deployment-architecture.md` — long-term operability of the AI parts inside the task chain.
-- *(external, Researching Diary)* `git_github/11-infrastructure-as-code-and-devops-automation.md` — brokers and sagas must be deployed reproducibly (IaC).
-- [SUGGESTED] **Bridge note: "From BPMN/process mining to saga design"** — a bank's workflows (payment approval, AML checks) already exist as processes; mining real logs to derive saga steps grounds the whole system in reality. *Why important:* discover the bank's processes — don't invent them.
+- [01-project-idea-and-evaluation.md](01-project-idea-and-evaluation.md) — ý tưởng dự án ghi chú này triển khai (Insight 2: "back-end vững chắc" *chính là* ý tưởng).
+- [03-modular-monolith-vs-microservices.md](03-modular-monolith-vs-microservices.md) — cách giữ các thành phần độc lập *trong khi* chúng trao đổi events (kỷ luật hợp đồng + ranh giới).
+- [04-mcp-and-function-calling-agent-interfaces.md](04-mcp-and-function-calling-agent-interfaces.md) — cách agents tiêu thụ các khả năng tác vụ này (lớp giao thức phía trên cùng backend).
+- *(bên ngoài, Nhật ký Nghiên cứu)* `ai_ml/05-mlops-lifecycle-and-deployment-architecture.md` — khả năng vận hành dài hạn của các phần AI bên trong chuỗi tác vụ.
+- *(bên ngoài, Nhật ký Nghiên cứu)* `git_github/11-infrastructure-as-code-and-devops-automation.md` — brokers và sagas phải được triển khai tái lập được (IaC).
+- [ĐỀ XUẤT] **Ghi chú cầu nối: "Từ tri thức quy trình/vòng đời khoản vay đến thiết kế saga"** — workflow của một bên cho vay (quyết định tín dụng, KYC, giải ngân) đã tồn tại như các quy trình; khai thác log thật (hoặc hồ sơ sản phẩm/SLA công khai của một chuẩn như HomeCredit) để suy ra các bước saga sẽ neo hệ thống vào thực tế. *Tại sao quan trọng:* khám phá các quy trình — đừng bịa ra chúng.
 
-## 🤔 Open Questions
+## 🤔 Câu hỏi Mở
 
-- [ ] Kafka vs RabbitMQ vs Redis Streams for the *first* company integration backbone — what's the ops cost at single-company scale?
-- [ ] Event sourcing for the ledger task: is the audit value worth the complexity in v1?
-- [ ] How does the human (or agent) approval step model a *pause of days* inside a saga — timeout policies, reminders, escalations?
-- [ ] What is the DLQ alerting + repair workflow when an agent is the operator?
+- [ ] Kafka vs RabbitMQ vs Redis Streams cho *backbone* tích hợp công ty đầu tiên — chi phí vận hành ở quy mô đơn công ty là gì?
+- [ ] Event sourcing cho ledger khoản vay: giá trị kiểm toán có đáng độ phức tạp trong v1 không?
+- [ ] Cổng quyết định tín dụng mô hình hoá một *tạm dừng nhiều ngày* (referral sang duyệt thủ công) bên trong saga thế nào — chính sách timeout, nhắc nhở, escalation?
+- [ ] Quy trình cảnh báo + sửa chữa DLQ thế nào khi operator là một agent?
+- [ ] Đối soát giải ngân & trả nợ với adapter e-wallet/ngân hàng — một dòng tiền đi có được xác nhận và đối soát thế nào (*hiệu ứng* exactly-once, không chỉ giao hàng)?
 
 ---
-*Events connect what must stay connected, without owning what must stay independent.*
+*Events kết nối những gì phải giữ kết nối, mà không sở hữu những gì phải giữ độc lập.*

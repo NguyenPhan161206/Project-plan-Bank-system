@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md"],
+  "default_agent": "orchestrator",
+  "agent": {
+    "build": { "color": "#FB923C" },
+    "plan": { "color": "#60A5FA" },
+    "general": { "color": "#22D3EE" },
+    "explore": { "color": "#E879F9" }
+  },
+  "permission": {
+    "bash": {
+      "*": "ask",
+      "git status": "allow",
+      "git diff *": "allow",
+      "git log *": "allow",
+      "git add *": "allow",
+      "git commit *": "allow"
+    }
+  }
+}
