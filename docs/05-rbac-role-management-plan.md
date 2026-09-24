@@ -158,9 +158,20 @@ def has_permission(user: User, permission: str) -> bool: ...
 - Lý do: doc 01 rủi ro #8 — chỉ trừu tượng hoá (abstract) khi nhu cầu thứ ba/tư thật xuất hiện. Hiện mới có 3 vai mặc định, chưa tới ngưỡng cần "infinite button".
 - **Điều kiện kích hoạt:** khi có **role thứ 4 có tên thật** xuất hiện trong vận hành, ví dụ tách `ops` (ghi nhận trả nợ) khỏi `staff` (duyệt hồ sơ) vì **segregation of duties (SoD)** — nghĩa vụ pháp lý không phải sở thích. Khi đó nền Tầng 1 đã sẵn, chỉ thêm CRUD + UI, không refactor.
 
+## 📌 Tham chiếu Thực tế (Reference, không phải nguồn copy)
+
+Repo **`qminhvc/csvc-umt`** (CSVC — modular monolith NestJS/TypeScript: facility/booking) là **bằng chứng khả thi + chuẩn đối chiếu** cho kỷ luật đã chốt trong doc này. Ta mượn **hình dạng kỷ luật**, không mượn code:
+
+- **Import-linter guard (import `src/core` → guard CI):** chặn nhập module-cuối ở tầng server; họ xét `import-linter` + `source-layout.spec` trong CI. → Khớp quyết định"import-linter chống leo module" ở backlog S8/00:17.
+- **Boost/leo quyền chống tự-leo-quyền (chống admin tự-phóng-quyền):** `grant.service.ts` — policy bất biến. Họ `assertRetainsSystemAdmin` (chống tự-khóa-mình) + `isSystemAdminGrant` (chống tự-phóng-đại-quyền). → Khớp ràng buộc doc 05 §5 "policy loại trừ `role.manage` → `application.*`".
+- **RBAC seed (3 role `system` + `is_system_role` seed + permission seed):** dữ liệu, không hardcode. → Khớp doc 05 §4 (seed 3 role + RBAC động).
+- **Audit mọi mutation role/grant (`grant.service` ghi `audit.record`):** → Khớp doc 05 §4 (audit mọi thay đổi).
+
+> ⚠️ **Repo này là NestJS/TS, THUỘC MIỀN KHÁC (facility/booking), KHÔNG phải nguồn để tích hợp pivot.** Mọi cơ chế trên được *tái-nguyên-bản* trong miền Python tài chính tiêu dùng của ta. Xem [00-mvp-backlog.md](00-mvp-backlog.md) (S8/S14) để biết cách triển khai tại chỗ.
+
 ---
 
-## 🔗 Chủ đề Liên quan
+
 
 - [00-mvp-backlog.md](00-mvp-backlog.md) — story S14 (Admin quản trị role) + scope IN/OUT.
 - [03-modular-monolith-vs-microservices.md](03-modular-monolith-vs-microservices.md) — bounded context `identity`/`access_control` (tài khoản user, phân quyền theo role, chính sách quyền).
