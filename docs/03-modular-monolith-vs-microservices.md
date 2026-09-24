@@ -128,11 +128,10 @@ return origination_local()               # module cũ — giữ cho tới khi l�
 3. Một modular monolith **đã mang lại** các phẩm chất chính của ý tưởng: độ độc lập thành phần cao (bounded contexts + ranh giới ràng buộc + dữ liệu cô lập), dễ sửa đổi (một codebase để refactor, hợp đồng có version), phát triển lâu dài (fitness functions bảo vệ khả năng tiến hoá).
 4. Khi scale/đội trở thành thật → **strangler-extract** bounded context bận nhất (nhiều khả năng là `credit_decisioning`, hotspot scoring theo hồ sơ) thành một service, mỗi lần một cái, không viết lại hệ thống.
 
-**Bản đồ module cụ thể cho v1 (vòng đời cho vay):**
+**Bản đồ module cụ thể cho v1 — 8 context lõi vòng đời khoản vay:**
 
 | Bounded context | Sở hữu | Phát sự kiện |
 |-----------------|--------|--------------|
-| `identity` / `access_control` | tài khoản người dùng (customer/staff/admin), mật khẩu (bcrypt), session/JWT, phân quyền theo role, chính sách quyền | `user.registered`, `user.role.changed`, `user.deactivated` |
 | `onboarding` / `kyc` | định danh khách hàng, xác minh scan CCCD, sàng lọc PEP/sanctions, đồng thuận Nghị định 13 | `customer.verified`, `kyc.failed` |
 | `application` (origination) | chọn sản phẩm, số tiền/kỳ hạn, kênh (app/e-wallet/POS), điều khoản giá | `application.submitted` |
 | `credit_decisioning` | scoring, policy/rules engine, dữ liệu bureau (CIC), auto-duyệt vs referral | `credit.decision.approved`, `credit.decision.rejected`, `credit.decision.referred` |
@@ -141,10 +140,23 @@ return origination_local()               # module cũ — giữ cho tới khi l�
 | `loan_servicing` | lịch trả nợ, dồn tích lãi, trả trước, phát hiện quá hạn | `repayment.received`, `loan.in.arrears`, `schedule.activated` |
 | `ledger` | hạch toán kế toán khoản vay double-entry, tách gốc/lãi, **dự phòng IFRS 9**, dồn tích | `ledger.posted` |
 | `reporting` | báo cáo SBV/CIC, dashboards (đọc sự kiện) | — |
-| *(v1)* `collections` | nhắc nợ, thu hồi, tái cấu trúc | `collection.action` |
-| *(v1)* `merchant` | đăng ký đối tác POS, hoa hồng/quyết toán cho trả góp | `merchant.registered`, `settlement.due` |
+
+**Context xuyên suốt (không tính vào 8 lõi):**
+
+| Bounded context | Sở hữu | Phát sự kiện |
+|-----------------|--------|--------------|
+| `identity` / `access_control` | tài khoản người dùng (customer/staff/admin), mật khẩu (bcrypt), session/JWT, phân quyền theo role, chính sách quyền | `user.registered`, `user.role.changed`, `user.deactivated` |
+
+**Sau v1 (không nằm lát cắt v1):**
+
+| Bounded context | Sở hữu | Phát sự kiện |
+|-----------------|--------|--------------|
+| `collections` | nhắc nợ, thu hồi, tái cấu trúc | `collection.action` |
+| `merchant` | đăng ký đối tác POS, hoa hồng/quyết toán cho trả góp | `merchant.registered`, `settlement.due` |
 
 Mọi mũi tên giữa các context là một **event trên bus** — độc lập bên trong, liên kết qua hợp đồng. Đó là ý tưởng gốc, được hiện thực hoá cho một bên cho vay. Lưu ý việc tách context "Approval/AML" cũ: xác minh định danh giờ sống trong `onboarding/kyc`; quyết định *rủi ro* sống trong `credit_decisioning`. Các mô hình, dữ liệu, độ trễ khác nhau — ép chúng lại với nhau là cái bẫy god-context kinh điển.
+
+> **Con số v1:** v1 = **8 context lõi vòng đời khoản vay** (bảng đầu). `identity`/`access_control` là context **xuyên suốt hạng nhất** (không tính vào 8). `collections`/`merchant` là **sau v1** — mọi đồng thuận về con số phải lấy quy ước này.
 
 `identity`/`access_control` là một context hạng nhất (không chỉ là "tiện ích xuyên suốt"): các context khác gọi nó qua public API để kiểm tra quyền (trong-process lúc MVP, qua network khi tách service), không sở hữu dữ liệu người dùng. Điều này hoá giải rủi ro "Bảo mật & identity vắng mặt" ở [01-project-idea-and-evaluation.md](01-project-idea-and-evaluation.md).
 

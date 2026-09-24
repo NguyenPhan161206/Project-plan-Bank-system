@@ -14,9 +14,9 @@
 
 - **MVP = không AI.** Chặn tay toàn bộ AI/ML: không trích xuất giấy tờ tự động, không scoring ML. Duyệt hồ sơ bằng **quy tắc có sẵn (rule-based)**.
 - Phục vụ **cả hai phía**: khách vay nộp hồ sơ qua web + bàn trực nội bộ cho nhân viên duyệt/tra cứu.
-- Có **auth đầy đủ 2 phía** với 3 role rõ ràng: `customer`, `staff`, `admin`. Admin quản trị tài khoản staff + tra cứu nhật ký kiểm toán, nhưng **không được tự duyệt hồ sơ** (ngăn xung đột vai trò).
+- Có **auth đầy đủ 2 phía** với 3 role mặc định: `customer`, `staff`, `admin` (RBAC động: role là dữ liệu seed, không hardcode — có thể tạo thêm vai trong tương lai). Admin quản trị tài khoản staff + tra cứu nhật ký kiểm toán, nhưng **không được tự duyệt hồ sơ** (ngăn xung đột vai trò).
 - **Giải ngân** qua một **cổng e-wallet/ngân hàng giả lập** (pending/success/fail + retry thủ công), chưa tích hợp thật.
-- **Backend: Python (FastAPI).** Khớp pseudocode các doc 02–04; không phải dịch thiết kế; sẵn sàng cho AI/ML ở giai đoạn sau.
+- **Backend: Python (FastAPI).** Giữ hình dạng module/public API tương thích với pseudocode docs 02–04 để *nạp backbone (event bus/saga/agent)* ở giai đoạn sau — không implement bus/MCP/agent ngay ở MVP; sẵn sàng cho AI/ML tương lai.
 - Bắt đầu theo Agile: **Sprint 0 setup → Sprint 1 lát cắt dọc mỏng nhất →** mới tới các lớp bàn trực, giải ngân, củng cố.
 - Chưa có **event bus / saga / Kafka** ở MVP — backend gọi module trong-process; backbone chỉ nạp khi có ≥2 luồng liên kết thật chạy song song.
 
@@ -38,7 +38,7 @@
 | Lịch trả nợ | Sau giải ngân tự sinh lịch trả nợ (gốc + lãi) |
 | Ghi nhận trả nợ | Ops ghi nhận khoản thanh toán tay (đóng vòng demo) |
 | Audit-basic | Ai duyệt/từ chối hồ sơ, khi nào, lý do; admin tra cứu theo user/hồ sơ/hành động |
-| Trạng thái nhất quán | `submitted → kyc_checked → decision_made → contract_sent → disbursed → repaying` (+ `rejected`) |
+| Trạng thái nhất quán | `submitted → decision_made → contract_sent → signed → disbursed → repaying` (+ nhánh `pending` cho hồ sơ refer/duyệt tay, `rejected`) |
 
 ### ❌ OUT (chặn tay, KHÔNG làm ở MVP)
 - AI/ML mọi dạng (trích xuất giấy tờ, scoring ML, agent, MCP)
@@ -84,16 +84,16 @@ Mỗi story có tiêu chí chấp nhận riêng; ưu tiên theo giá trị + r�
 | S11 | E9 Admin | Admin quản trị user: tạo staff, khóa/mở khóa, reset mật khẩu | Must | 2 |
 | S12 | E9 Admin | Admin tra cứu nhật ký kiểm toán (filter theo user/hồ sơ/hành động) | Must | 3 |
 | S13 | E9 Admin | Admin KHÔNG được tự duyệt hồ sơ (tách vai trò quản trị vs vận hành) | Should | 3 |
-| S14 | E9 Admin | Admin quản trị role: tạo role mới (tên + chọn tập quyền), đổi tên, xóa role (chỉ role do admin tạo), gán quyền, gán role cho user; **chỉ admin** thao tác; 3 role seed (`customer`/`staff`/`admin`) không được xóa; **admin không được tự thu hồi quyền cốt lõi của role Admin (chống tự-khóa-mình)** | Should | 3 |
+| S14 | E9 Admin | Admin quản trị role: tạo role mới (tên + chọn tập quyền), đổi tên, xóa role (chỉ role do admin tạo), gán quyền, gán role cho user; **chỉ admin** thao tác; 3 role seed (`customer`/`staff`/`admin`) không được xóa; **admin không được tự thu hồi quyền cốt lõi của role Admin (chống tự-khóa-mình)**; **policy bất biến: user sở hữu role có `role.manage` thì quyền `application.*` bị triệt tiêu (chống tự-phóng-đại-quyền vòng qua rào duyệt)** | Should | 0 (Tầng 1) / 3 (Tầng 2, hoãn) |
 
 ---
 
 ## 4. Lịch trình Sprint (1–2 tuần/sprint, demo cuối mỗi sprint)
 
-- **Sprint 0 — Setup (trước code):** backlog này thành nguồn chuẩn; skeleton repo (monorepo); CI (lint + import-linter + pytest); khung auth (cả 3 role `customer`, `staff`, `admin`); xác nhận tech stack.
+- **Sprint 0 — Setup (trước code):** backlog này thành nguồn chuẩn; skeleton repo (monorepo); CI (lint + import-linter + pytest); khung auth (3 role mặc định `customer`, `staff`, `admin`); **nền RBAC Tầng 1: data model role/permission là dữ liệu seed + `has_permission` (không hardcode role trong code)**; xác nhận tech stack.
 - **Sprint 1 — Lát cắt dọc mỏng nhất:** `đăng nhập khách → tạo hồ sơ → rule tự duyệt → hiện trạng thái`. **Chưa event bus, chưa saga, chưa gate cổng.** Backend gọi hàm trong-process. Mục tiêu: có thứ demo được.
 - **Sprint 2 — Bàn trực + Minh bạch:** đăng nhập staff, hàng chờ, duyệt/từ chối, audit-basic, chế độ `pending`; **admin quản trị user** (tạo staff, khóa/mở khóa, reset mật khẩu).
-- **Sprint 3 — Giải ngân + hợp đồng:** e-sign giả, cổng giả lập 3 trạng thái + retry, sinh lịch trả nợ; **tra cứu nhật ký kiểm toán cho admin**; chặn admin tự duyệt hồ sơ; **admin quản trị role** (tạo/đổi tên/xóa role, gán quyền, gán role cho user, ràng buộc chống tự-khóa-mình).
+- **Sprint 3 — Giải ngân + hợp đồng:** e-sign giả, cổng giả lập 3 trạng thái + retry, sinh lịch trả nợ; **tra cứu nhật ký kiểm toán cho admin**; chặn admin tự duyệt hồ sơ; **Tầng 2 quản trị role** (tạo/đổi tên/xóa role, gán quyền, gán role cho user, ràng buộc chống tự-khóa-mình + chống tự-phóng-đại-quyền) — **hoãn nếu chưa có role thứ 4 có tên thật** (ví dụ tách `ops` để SoD), giữ nguyên Tầng 1 RBAC động từ Sprint 0.
 - **Sprint 4 — Củng cố & đóng vòng:** ghi nhận trả nợ thủ công, bằng chứng "vững chắc" (trạng thái nhất quán, test); cân nhắc nạp event backbone cho các luồng thật sự chạy song song.
 
 ### Định nghĩa "Done" cho mỗi sprint
@@ -123,7 +123,7 @@ Nguyên tắc giữ trong suốt MVP:
 ## 🔗 Chủ đề Liên quan
 
 - [01-project-idea-and-evaluation.md](01-project-idea-and-evaluation.md) — lý do MVP thuần feature (rủi ro kinh tế đơn vị AI, chu kỳ học hỏi nhỏ).
-- [03-modular-monolith-vs-microservices.md](03-modular-monolith-vs-microservices.md) — 8 bounded context là đích đến v1; MVP triển khai một lát của chúng, định hình module ngay từ đầu.
+- [03-modular-monolith-vs-microservices.md](03-modular-monolith-vs-microservices.md) — 8 bounded context lõi vòng đời khoản vay là đích v1 (+ `identity`/`access_control` là context xuyên suốt, không tính vào 8; `collections`/`merchant` sau v1); MVP triển khai một lát của chúng, định hình module ngay từ đầu.
 
 ## 🤔 Câu hỏi Mở
 

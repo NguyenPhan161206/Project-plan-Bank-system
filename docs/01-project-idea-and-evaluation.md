@@ -7,6 +7,8 @@
 **Loại:** Ghi nhận ý tưởng + đánh giá phản biện (cấu trúc & chất lượng lập luận)
 **Dự án:** Hệ thống Tài chính Tiêu dùng Modular — lĩnh vực neo đậu: **vận hành tài chính tiêu dùng**, lấy chuẩn **Home Credit Việt Nam** (một công ty tài chính được cấp phép, chịu giám sát của NHNN). Clarification Gap #1 đã làm rõ: "công ty có chuyên môn cụ thể" là một *bên cho vay*, không phải ngân hàng nhận tiền gửi.
 
+> **📌 Đánh dấu mục tiêu:** Đây là tài liệu **ý tưởng / hướng tới v1**. Mọi phần liên quan AI/agent/backbone đang được **trì hoãn ở MVP** — MVP thuần feature, không AI, không event bus, không MCP (xem [00-mvp-backlog.md](00-mvp-backlog.md)).
+
 ---
 
 ## 📌 Nhật ký Quyết định (cập nhật 2026-09-24)

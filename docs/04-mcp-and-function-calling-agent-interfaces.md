@@ -8,6 +8,8 @@
 **Độ khó:** Trung cấp
 **Dự án:** Hệ thống Tài chính Tiêu dùng Modular — giao diện agent có kiểm soát (MCP + CLI `--json`) qua đó AI agents vận hành các workflow cho vay (KYC, quyết định tín dụng, giải ngân, loan servicing).
 
+> **📌 Đánh dấu mục tiêu:** Đây là thiết kế **hướng tới v1** (MCP + AI agents). MVP **trì hoãn toàn bộ** AI/ML, agents và MCP (xem [00-mvp-backlog.md](00-mvp-backlog.md)). Giữ lại làm mục tiêu giai đoạn sau, **không** triển khai trong MVP.
+
 ---
 
 ## 📌 Tóm tắt Chính (TL;DR)

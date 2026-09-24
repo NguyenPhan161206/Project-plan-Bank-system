@@ -8,6 +8,8 @@
 **Độ khó:** Trung cấp
 **Dự án:** Hệ thống Tài chính Tiêu dùng Modular — thiết kế "back-end vững chắc" cho các chuỗi tác vụ cho vay (origination → KYC → quyết định tín dụng → hợp đồng → giải ngân → servicing/trả nợ → sổ sách → báo cáo).
 
+> **📌 Đánh dấu mục tiêu:** Đây là thiết kế **hướng tới v1** (event bus + saga + schema registry). MVP **trì hoãn toàn bộ** phần này — backend chạy in-process, state máy nằm trong DB (xem [00-mvp-backlog.md](00-mvp-backlog.md)). Tài liệu này giữ để định hình module/public API tương thích cho lần nâng cấp backbone sau. Tên state dưới đây đã đồng bộ theo chuỗi chuẩn MVP.
+
 ---
 
 ## 📌 Tóm tắt Chính (TL;DR)
@@ -120,10 +122,12 @@ Saga có hai hoá thân:
 
 ```python
 # saga_coordinator.py — orchestrating saga
-# Workflow: ApplicationSubmitted → KYCVerified → CreditDecision(auto/human) → ContractSigned → Disbursed → RepaymentReceived
+# Workflow: ApplicationSubmitted → CreditDecision(auto/human) → ContractSent → Signed → Disbursed → RepaymentReceived
 
 class CashLoanSagaCoordinator:
-    STATES = ("submitted", "kyc_verified", "decision_made", "signed", "disbursed", "repaying", "compensated")
+    # Trạng thái chuẩn MVP (đồng bộ docs/00-mvp-backlog.md); pending = hồ sơ refer sang duyệt tay.
+    # compensated/rejected là các nhánh kết thúc khi saga bù trừ (v1), không phải state chính của chuỗi.
+    STATES = ("submitted", "decision_made", "pending", "contract_sent", "signed", "disbursed", "repaying", "rejected")
 
     def __init__(self, bus, store):
         self.bus = bus        # event bus / broker
@@ -140,12 +144,15 @@ class CashLoanSagaCoordinator:
         if not self._is_expected(event, saga.state):
             return  # event cũ/nghịch thứ tự → bỏ qua (idempotency)
 
-        if event["type"] == "kyc.verified" and event["ok"]:
-            saga.state = "kyc_verified"
-            await self.bus.publish("credit.decision.requested", {"application_id": key})
-        elif event["type"] == "credit.decision.approved":
+        if event["type"] == "credit.decision.approved":
             saga.state = "decision_made"
             await self.bus.publish("contract.generation.requested", {"application_id": key})
+        elif event["type"] == "credit.decision.referred":
+            saga.state = "pending"  # hồ sơ chờ duyệt tay (bàn trực)
+            await self.bus.publish("manual.review.requested", {"application_id": key})
+        elif event["type"] == "contract.generated":
+            saga.state = "contract_sent"
+            await self.bus.publish("contract.send.requested", {"application_id": key})
         elif event["type"] == "contract.signed":
             saga.state = "signed"
             await self.bus.publish("disbursement.requested", {"application_id": key})
@@ -155,7 +162,7 @@ class CashLoanSagaCoordinator:
         elif event["type"] == "repayment.received":
             saga.state = "repaying"
             self.store.complete(key)   # v0: khoản trả nợ đầu tiên đóng đường chính
-        elif event["type"] in ("kyc.failed", "credit.decision.rejected", "contract.expired"):
+        elif event["type"] in ("credit.decision.rejected", "contract.expired"):
             await self._compensate(saga)  # ví dụ: đóng application + thông báo kênh
 
     async def _compensate(self, saga):
@@ -197,10 +204,10 @@ async def handle_disburse(event, db, gateway):
 | Không chặn vô hạn | DLQ + cảnh báo | Test: poison message đáp vào DLQ, cảnh báo kích hoạt |
 | Hợp đồng tiến hoá được | Schema registry + SemVer + dual-write | Test: event v2 được consumer v1 tiêu thụ trong cửa sổ |
 
-**Ví dụ task graph cho neo đậu v0 (vay tiền mặt online)** — chuỗi theo kiểu HomeCredit:
+**Ví dụ task graph cho neo đậu v0 (vay tiền mặt online)** — chuỗi theo kiểu HomeCredit, không có bước KYC riêng (MVP nhập CCCD tay + rule check; xem nhánh KYC ở module map v1 trong doc 03):
 
 ```
-[KYC/Onboarding] ──kyc.verified──▶ [Application] ──credit.decision.approved (cổng auto hoặc người)──▶
+[Application] ──credit.decision.approved (rule auto hoặc người)──▶
 [Contracting] ──contract.signed──▶ [Disbursement] ──disbursement.completed──▶
 [Loan Servicing] ──repayment.received──▶ [Ledger] ──ledger.posted──▶ [Reporting]
 ```
